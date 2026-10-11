@@ -36,17 +36,22 @@ public enum ProjectEditor {
         let settings: [String: [String: String]]
     }
 
+    /// Adds or removes a capability, resolved against Apple's catalog in the selected Xcode.
     public static func planCapability(
-        _ capability: Capability, values: [String], remove: Bool,
-        path: String, target: String?, force: Bool
+        _ query: String, values: [String], remove: Bool, path: String, target: String?, force: Bool
     ) async throws -> EditPlan {
-        try await planEntitlements(
+        async let loadedSchema = EntitlementSchema.load()
+        let catalog = try await CapabilityCatalog.load(team: nil)
+        let capability = try CapabilityWriter.resolve(query, catalog: catalog)
+        let schema = await loadedSchema
+        let keys = CapabilityWriter.keys(of: capability, schema: schema)
+        return try await planEntitlements(
             path: path, target: target, force: force, createIfMissing: !remove,
-            label: capability.title, removing: remove
+            label: capability.name, removing: remove
         ) { current, bundleID in
-            remove
-                ? try Capabilities.removing(capability, values: values, from: current)
-                : Capabilities.adding(try capability.entries(values: values, bundleID: bundleID), to: current)
+            if remove { return CapabilityWriter.removing(keys: keys, values: values, from: current) }
+            let entries = try await CapabilityWriter.entries(for: capability, values: values, bundleID: bundleID, schema: schema)
+            return CapabilityWriter.adding(entries, to: current)
         }
     }
 
@@ -55,7 +60,7 @@ public enum ProjectEditor {
     public static func planEntitlements(
         path: String, target targetName: String?, force: Bool, createIfMissing: Bool,
         label: String, removing: Bool = false,
-        mutate: ([String: Any], _ bundleID: String) throws -> [String: Any]
+        mutate: ([String: Any], _ bundleID: String) async throws -> [String: Any]
     ) async throws -> EditPlan {
         let resolved = try await resolveTarget(path: path, name: targetName, force: force)
         let file = resolved.file
@@ -96,7 +101,7 @@ public enum ProjectEditor {
         for url in files {
             let original = FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
             let current = try original.map { try Entitlements.parse($0, path: url.path) } ?? [:]
-            let updated = try mutate(current, bundleID)
+            let updated = try await mutate(current, bundleID)
             if original != nil, NSDictionary(dictionary: updated).isEqual(to: current) {
                 plan.notes.append("\(url.lastPathComponent): \(label) already \(removing ? "absent" : "up to date")")
                 continue

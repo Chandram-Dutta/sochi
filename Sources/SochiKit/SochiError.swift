@@ -32,6 +32,11 @@ public enum SochiError: Error, CustomStringConvertible {
     case pathExists(String)
     case xcodeDataUnavailable(String)
     case notAnArray(String)
+    case ambiguousCapability(String, candidates: [String])
+    case capabilityNeedsValue(capability: String, key: String, hint: String?, documentation: String?)
+    case capabilityNeedsChoice(capability: String, key: String, options: [String])
+    case capabilityHasNoEntitlements(String)
+    case capabilityUnsupported(String, String)
     case unknownProductType(String, suggestions: [String])
     case noEmbedRule(String)
 
@@ -73,7 +78,9 @@ public enum SochiError: Error, CustomStringConvertible {
         case .editVerificationFailed(let detail):
             return "Edit didn't verify (\(detail)). No files were changed."
         case .unknownCapability(let name, let available):
-            return "Unknown capability '\(name)'. Available: \(available.joined(separator: ", "))"
+            return available.isEmpty
+                ? "No capability matches '\(name)'. Run `sochi capabilities --all` to list them."
+                : "Unknown capability '\(name)'. Available: \(available.joined(separator: ", "))"
         case .invalidCapabilityValue(let name, let reason):
             return "\(name) \(reason)"
         case .unknownTarget(let name, let available):
@@ -98,6 +105,17 @@ public enum SochiError: Error, CustomStringConvertible {
             return "A target named \(name) already exists"
         case .pathExists(let path):
             return "\(path) already exists; pick another name or move it"
+        case .capabilityNeedsValue(let capability, let key, let hint, let documentation):
+            return "\(capability) needs a value for \(key)\(hint.map { " (\($0))" } ?? ""). Pass it after the name: sochi add capability \(capability) <value>"
+                + (documentation.map { "\n  Format: \($0)" } ?? "")
+        case .capabilityNeedsChoice(let capability, let key, let options):
+            return "\(capability) needs you to choose for \(key): \(options.joined(separator: ", ")). E.g. sochi add capability \(capability) \(options.first ?? "<value>")"
+        case .capabilityHasNoEntitlements(let name):
+            return "\(name) has no entitlements to write; it's enabled on Apple's side only (automatic signing handles it)"
+        case .capabilityUnsupported(let name, let reason):
+            return "\(name): \(reason)"
+        case .ambiguousCapability(let query, let candidates):
+            return "'\(query)' matches several capabilities: \(candidates.joined(separator: ", ")). Use the full name."
         case .notAnArray(let key):
             return "\(key) isn't an array entitlement; use `sochi entitlements set` instead"
         case .xcodeDataUnavailable(let what):

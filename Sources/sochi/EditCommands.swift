@@ -21,8 +21,8 @@ struct Add: AsyncParsableCommand {
         abstract: "Add a capability or a target, like Xcode's + Capability and New Target.",
         discussion: """
             Examples:
-              sochi add capability push
-              sochi add capability app-groups group.com.example.shared
+              sochi add capability push-notifications
+              sochi add capability associated-domains applinks:example.com
               sochi add target Weather --type app-extension --point com.apple.widgetkit-extension
             """,
         subcommands: [AddCapability.self, AddTarget.self])
@@ -32,9 +32,18 @@ struct AddCapability: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "capability",
         abstract: "Add a capability to a target.",
-        discussion: "Capabilities:\n\(capabilityList)\n\nThe next build registers it with Apple through automatic signing.")
+        discussion: """
+            Capabilities come from Apple's catalog in the selected Xcode; list them with `sochi capabilities --all`.
+            Names are Apple's (e.g. push-notifications, sign-in-with-apple, healthkit), its IDs (PUSH_NOTIFICATIONS),
+            or any unambiguous part (push). The next build registers it with Apple through automatic signing.
 
-    @Argument(help: "Capability name, e.g. push or app-groups.")
+            Examples:
+              sochi add capability push-notifications
+              sochi add capability associated-domains applinks:example.com
+              sochi add capability network-extensions packet-tunnel-provider
+            """)
+
+    @Argument(help: "Capability, e.g. push-notifications or healthkit.")
     var name: String
 
     @Argument(help: "Values for list capabilities, e.g. group IDs or domains.")
@@ -47,10 +56,9 @@ struct AddCapability: AsyncParsableCommand {
 
     func run() async throws {
         try await reportingErrors {
-            let capability = try Capabilities.named(name)
-            try await runPlan(options: options, success: "added \(Terminal.bold(capability.title))", nextStep: signingHint) {
+            try await runPlan(options: options, success: "added \(Terminal.bold(name))", nextStep: signingHint) {
                 try await ProjectEditor.planCapability(
-                    capability, values: values, remove: false, path: options.path, target: target, force: options.force)
+                    name, values: values, remove: false, path: options.path, target: target, force: options.force)
             }
         }
     }
@@ -114,7 +122,7 @@ struct RemoveCapability: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "capability",
         abstract: "Remove a capability (or specific values of one) from a target.",
-        discussion: "Capabilities:\n\(capabilityList)")
+        discussion: "Takes the same names as `sochi add capability`.")
 
     @Argument(help: "Capability name.")
     var name: String
@@ -129,10 +137,9 @@ struct RemoveCapability: AsyncParsableCommand {
 
     func run() async throws {
         try await reportingErrors {
-            let capability = try Capabilities.named(name)
-            try await runPlan(options: options, success: "removed \(Terminal.bold(capability.title))", nextStep: nil) {
+            try await runPlan(options: options, success: "removed \(Terminal.bold(name))", nextStep: nil) {
                 try await ProjectEditor.planCapability(
-                    capability, values: values, remove: true, path: options.path, target: target, force: options.force)
+                    name, values: values, remove: true, path: options.path, target: target, force: options.force)
             }
         }
     }
@@ -315,7 +322,8 @@ private enum EntitlementValue: Sendable {
 
 struct CapabilitiesCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "capabilities", abstract: "Show a target's capabilities and the ones sochi can add.")
+        commandName: "capabilities",
+        abstract: "Show a target's capabilities, or every capability Apple offers for iOS (--all).")
 
     @Option(name: .customLong("project"), help: "Project directory, .xcodeproj, or .xcworkspace.")
     var path: String = "."
@@ -323,38 +331,54 @@ struct CapabilitiesCommand: AsyncParsableCommand {
     @Option(name: .shortAndLong, help: "Target to inspect (default: the app target).")
     var target: String?
 
+    @Flag(help: "List every iOS capability in Apple's catalog instead.")
+    var all = false
+
     func run() async throws {
         try await reportingErrors {
+            Terminal.status("  \(Terminal.dim("reading catalog…"))")
+            let catalog = try await CapabilityCatalog.load(team: nil)
+            if all {
+                Terminal.clearStatus()
+                for capability in catalog.available() {
+                    let needsID = capability.entitlements(for: "IOS").contains { $0.values.contains(where: \.isPlaceholder) }
+                    let marks = [needsID ? "needs ID" : nil, capability.needsApproval ? "needs Apple approval" : nil].compactMap { $0 }
+                    Terminal.print("  \(capability.slug.padding(toLength: 44, withPad: " ", startingAt: 0))\(capability.name)"
+                        + (marks.isEmpty ? "" : Terminal.dim("  (\(marks.joined(separator: ", ")))")))
+                }
+                for local in LocalCapability.all {
+                    Terminal.print("  \(local.slug.padding(toLength: 44, withPad: " ", startingAt: 0))\(local.name)" + Terminal.dim("  (Xcode-only)"))
+                }
+                Terminal.print(Terminal.dim("\n\(catalog.available().count) from \(catalog.source.lastPathComponent)  ·  sochi add capability <name>"))
+                return
+            }
             Terminal.status("  \(Terminal.dim("reading project…"))")
+            async let schema = EntitlementSchema.load()
             let (target, files) = try await ProjectEditor.entitlements(path: path, target: target)
+            let titles = await schema
             Terminal.clearStatus()
             Terminal.print(Terminal.bold(target))
             if files.isEmpty { Terminal.print(Terminal.dim("  no entitlements file")) }
-            var enabled = Set<String>()
             for (url, entitlements) in files {
                 Terminal.print(Terminal.dim("  \(relativePath(url))"))
-                let (known, unknown) = Capabilities.detect(in: entitlements)
-                for (capability, values) in known {
-                    enabled.insert(capability.name)
-                    let detail = values.isEmpty ? "" : Terminal.dim("  \(values.joined(separator: ", "))")
-                    Terminal.print("  \(Terminal.green("●")) \(capability.title)\(detail)")
+                let (enabled, unclaimed) = catalog.detect(in: entitlements)
+                for capability in enabled {
+                    let lists = capability.entitlements(for: "IOS").compactMap { entitlements[$0.key] as? [String] }.flatMap { $0 }
+                    let detail = lists.isEmpty ? "" : Terminal.dim("  \(lists.joined(separator: ", "))")
+                    Terminal.print("  \(Terminal.green("●")) \(capability.name)\(detail)")
                 }
-                for key in unknown { Terminal.print("  \(Terminal.green("●")) \(Terminal.dim(key))") }
+                for key in unclaimed {
+                    // Name keys no catalog entry claims from Xcode's own schema (e.g. Data Protection).
+                    let name = LocalCapability.all.first { $0.key == key }?.name ?? titles[key]?.title
+                    Terminal.print("  \(Terminal.green("●")) " + (name ?? Terminal.dim(key)))
+                }
             }
-            let available = Capabilities.all.filter { !enabled.contains($0.name) }
-            if !available.isEmpty {
-                Terminal.print()
-                Terminal.print(Terminal.dim("available: \(available.map(\.name).joined(separator: ", "))  ·  sochi add capability <name>"))
-            }
+            Terminal.print(Terminal.dim("\nsochi capabilities --all  ·  sochi add capability <name>"))
         }
     }
 }
 
 // MARK: - Shared
-
-private let capabilityList = Capabilities.all
-    .map { "  \($0.name.padding(toLength: 30, withPad: " ", startingAt: 0))\($0.title)\($0.hint.map { "  (e.g. \($0))" } ?? "")" }
-    .joined(separator: "\n")
 
 private let signingHint = "Apple's side (App ID, profile) is set up by automatic signing on the next `sochi run`."
 

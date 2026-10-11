@@ -285,41 +285,69 @@ import Testing
 }
 
 @Suite struct CapabilityTests {
-    @Test func listsUnionAndDefaultFromBundleID() throws {
-        let groups = try Capabilities.named("app-group")
-        #expect(try groups.entries(values: [], bundleID: "dev.app") == ["com.apple.security.application-groups": .array(["group.dev.app"])])
-        let merged = Capabilities.adding(try groups.entries(values: ["group.b", "group.a"], bundleID: "x"),
-                                         to: ["com.apple.security.application-groups": ["group.a"]])
-        #expect(merged["com.apple.security.application-groups"] as? [String] == ["group.a", "group.b"])
-        #expect(throws: SochiError.self) { try groups.entries(values: ["nogroupprefix"], bundleID: "x") }
+    /// Rules that turn Apple's catalog into entitlements, checked against the installed Xcode's data.
+    @Test func writesEntitlementsFromAppleData() async throws {
+        let catalog = try await CapabilityCatalog.load(team: nil)
+        let schema = await EntitlementSchema.load()
+        func entries(_ name: String, _ values: [String] = []) async throws -> [String: PlistValue] {
+            try await CapabilityWriter.entries(
+                for: try CapabilityWriter.resolve(name, catalog: catalog), values: values, bundleID: "dev.app", schema: schema)
+        }
+        #expect(try await entries("push-notifications") == ["aps-environment": .string("development")])
+        // "push" is ambiguous in Apple's catalog (Push to Talk, Location Push…), so sochi asks rather than guesses.
+        #expect(throws: SochiError.self) { try CapabilityWriter.resolve("push", catalog: catalog) }
+        #expect(try await entries("sign-in-with-apple") == ["com.apple.developer.applesignin": .array(["Default"])])
+        // Only the required key: the optional clinical-records list and background delivery are opt-in.
+        #expect(try await entries("healthkit") == ["com.apple.developer.healthkit": .bool(true)])
+        #expect(try await entries("game-center") == ["com.apple.developer.game-center": .bool(true)])
+        // Associated Domains is an array per Xcode's schema, though the portal catalog calls it a STRING wildcard.
+        #expect(try await entries("associated-domains", ["applinks:example.com"])
+                == ["com.apple.developer.associated-domains": .array(["applinks:example.com"])])
+        await #expect(throws: SochiError.self) { try await entries("associated-domains") }
+        await #expect(throws: SochiError.self) { try await entries("network-extensions") }
+        #expect(try await entries("network-extensions", ["packet-tunnel-provider"])
+                == ["com.apple.developer.networking.networkextension": .array(["packet-tunnel-provider"])])
+        await #expect(throws: SochiError.self) { try await entries("network-extensions", ["teleport"]) }
+        // No catalog entitlements: found in Xcode's schema by name, values from the schema/docs.
+        await #expect(throws: SochiError.self) { try await entries("data-protection") }
+        #expect(try await entries("data-protection", ["NSFileProtectionComplete"])
+                == ["com.apple.developer.default-data-protection": .string("NSFileProtectionComplete")])
+        await #expect(throws: SochiError.self) { try await entries("in-app-purchase") }
+        await #expect(throws: SochiError.self) { try await entries("push-notifications", ["extra"]) }
     }
 
-    @Test func validatesAndNormalizes() throws {
-        #expect(throws: SochiError.self) { try Capabilities.named("associated-domains").entries(values: [], bundleID: "x") }
-        #expect(throws: SochiError.self) { try Capabilities.named("associated-domains").entries(values: ["example.com"], bundleID: "x") }
-        #expect(throws: SochiError.self) { try Capabilities.named("push").entries(values: ["extra"], bundleID: "x") }
-        #expect(try Capabilities.named("keychain").entries(values: ["dev.shared"], bundleID: "x")
+    @Test func handlesXcodeOnlyCapabilities() async throws {
+        let catalog = try await CapabilityCatalog.load(team: nil)
+        let schema = EntitlementSchema(keys: [:])
+        let keychain = try CapabilityWriter.resolve("keychain-sharing", catalog: catalog)
+        #expect(try await CapabilityWriter.entries(for: keychain, values: [], bundleID: "dev.app", schema: schema)
+                == ["keychain-access-groups": .array(["$(AppIdentifierPrefix)dev.app"])])
+        #expect(try await CapabilityWriter.entries(for: keychain, values: ["dev.shared"], bundleID: "x", schema: schema)
                 == ["keychain-access-groups": .array(["$(AppIdentifierPrefix)dev.shared"])])
-        #expect(throws: SochiError.self) { try Capabilities.named("teleportation") }
+        let modes = try CapabilityWriter.resolve("background-modes", catalog: catalog)
+        await #expect(throws: SochiError.self) { try await CapabilityWriter.entries(for: modes, values: [], bundleID: "x", schema: schema) }
     }
 
-    @Test func removesValuesOrWholeCapability() throws {
-        let groups = try Capabilities.named("app-groups")
-        let start: [String: Any] = ["com.apple.security.application-groups": ["group.a", "group.b"], "aps-environment": "development"]
-        let partial = try Capabilities.removing(groups, values: ["group.a"], from: start)
-        #expect(partial["com.apple.security.application-groups"] as? [String] == ["group.b"])
-        let emptied = try Capabilities.removing(groups, values: ["group.b"], from: partial)
-        #expect(emptied["com.apple.security.application-groups"] == nil)
-        #expect(emptied["aps-environment"] as? String == "development")
-        let health = try Capabilities.removing(try Capabilities.named("healthkit"), values: [],
-            from: ["com.apple.developer.healthkit": true, "com.apple.developer.healthkit.access": [String]()])
-        #expect(health.isEmpty)
+    @Test func mergesAndRemovesValues() {
+        let groups = "com.apple.security.application-groups"
+        let merged = CapabilityWriter.adding([groups: .array(["group.b", "group.a"])], to: [groups: ["group.a"]])
+        #expect(merged[groups] as? [String] == ["group.a", "group.b"])
+        let start: [String: Any] = [groups: ["group.a", "group.b"], "aps-environment": "development"]
+        let partial = CapabilityWriter.removing(keys: [groups], values: ["group.a"], from: start)
+        #expect(partial[groups] as? [String] == ["group.b"])
+        let emptied = CapabilityWriter.removing(keys: [groups], values: ["group.b"], from: partial)
+        #expect(emptied[groups] == nil && emptied["aps-environment"] as? String == "development")
+        #expect(CapabilityWriter.removing(keys: ["aps-environment"], values: [], from: start)["aps-environment"] == nil)
     }
 
-    @Test func detectsKnownAndUnknownKeys() {
-        let (known, unknown) = Capabilities.detect(in: ["aps-environment": "development", "com.apple.developer.custom": true])
-        #expect(known.map(\.0.name) == ["push"])
-        #expect(unknown == ["com.apple.developer.custom"])
+    @Test func readsXcodeSchemaAndDocs() throws {
+        let xml = #"<extension><definition name="_root_" className="Dictionary"><dictionaryKeys><key name="a.flag" className="Boolean" localizedString="Flag"/><key name="a.list" className="ListClass" localizedString="List"/></dictionaryKeys></definition><definition name="ListClass" className="Array" arrayElementClassName="ItemClass"/><definition name="ItemClass" className="String"><allowableValues><value name="one"/><value name="two"/></allowableValues></definition></extension>"#
+        let schema = EntitlementSchema.parse(xml: xml)
+        #expect(schema["a.flag"]?.kind == .boolean)
+        #expect(schema["a.list"] == .init(name: "a.list", kind: .array, title: "List", allowedValues: ["one", "two"]))
+        #expect(schema.key(titled: "list")?.name == "a.list")
+        let docs = #"{"primaryContentSections":[{"kind":"details","details":{"ideTitle":"Domains","value":[{"arrayMode":true,"baseType":"string "}]}},{"kind":"possibleValues","values":[{"name":"x"}]}]}"#
+        #expect(EntitlementSchema.parseDocs(Data(docs.utf8), name: "k") == .init(name: "k", kind: .array, title: "Domains", allowedValues: ["x"]))
     }
 
     @Test func refusesGeneratedProjects() throws {
@@ -446,5 +474,27 @@ import Testing
         let main = objects.values.first { $0["isa"] as? String == "PBXGroup" && $0["children"] != nil && $0["name"] == nil && $0["path"] == nil }!
         let order = (main["children"] as! [String]).map { objects[$0]?["path"] as? String ?? objects[$0]?["name"] as? String ?? "?" }
         #expect(order == ["HelloApp", "Widget", "Frameworks", "Products"])
+    }
+}
+
+/// Reads the installed Xcode's capability catalog: sochi derives capabilities from Apple's data.
+@Suite struct CapabilityCatalogTests {
+    @Test func loadsAndQueriesTheInstalledCatalog() async throws {
+        let catalog = try await CapabilityCatalog.load(team: nil)
+        let ios = catalog.available()
+        #expect(ios.count > 80)
+        let push = try catalog.find("push-notifications")
+        #expect(push.id == "PUSH_NOTIFICATIONS")
+        #expect(push.entitlements(for: "IOS").map(\.key) == ["aps-environment"])
+        #expect(try catalog.find("PUSH_NOTIFICATIONS").id == push.id)
+        #expect(try catalog.find("Sign In with Apple").slug == "sign-in-with-apple")
+        #expect(try catalog.find("healthkit").id == "HEALTHKIT")
+        #expect(throws: SochiError.self) { try catalog.find("teleportation") }
+        let groups = try catalog.find("app-groups")
+        #expect(groups.entitlements(for: "IOS").first?.values.first?.isPlaceholder == true)
+
+        let (enabled, unclaimed) = catalog.detect(in: ["aps-environment": "development", "com.example.custom": true])
+        #expect(enabled.map(\.id).contains("PUSH_NOTIFICATIONS"))
+        #expect(unclaimed == ["com.example.custom"])
     }
 }
