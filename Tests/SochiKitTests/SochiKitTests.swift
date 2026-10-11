@@ -341,3 +341,110 @@ import Testing
         #expect(file.sourceFolder(of: app) == "HelloApp")
     }
 }
+
+/// Reads the installed Xcode's build specs: these assert sochi derives embedding from Apple's data, not a list.
+@Suite struct XcodeSpecsTests {
+    @Test func resolvesEmbeddingFromInstalledXcode() async throws {
+        let specs = try await XcodeSpecs.load()
+        let foundation = EmbedRule(phaseName: "Embed Foundation Extensions", dstSubfolderSpec: "13", dstPath: "")
+        #expect(specs.embedRule("com.apple.product-type.app-extension") == foundation)
+        #expect(specs.productFileType("com.apple.product-type.app-extension") == "wrapper.app-extension")
+        #expect(specs.wrapperSuffix("com.apple.product-type.app-extension") == ".appex")
+        // Subtypes inherit through BasedOn.
+        #expect(specs.embedRule("com.apple.product-type.app-extension.messages") == foundation)
+        #expect(specs.embedRule("com.apple.product-type.extensionkit-extension")
+                == EmbedRule(phaseName: "Embed ExtensionKit Extensions", dstSubfolderSpec: "16", dstPath: "$(EXTENSIONS_FOLDER_PATH)"))
+        #expect(specs.embedRule("com.apple.product-type.application.on-demand-install-capable")
+                == EmbedRule(phaseName: "Embed App Clips", dstSubfolderSpec: "16", dstPath: "$(CONTENTS_FOLDER_PATH)/AppClips"))
+        #expect(specs.productFileType("com.apple.product-type.application.on-demand-install-capable") == "wrapper.application")
+        #expect(!specs.isKnown("com.apple.product-type.teleporter"))
+        // Apps aren't embedded (App Clips are, via their own product type).
+        #expect(specs.embedRule("com.apple.product-type.application") == nil)
+        #expect(specs.wrapperSuffix("com.apple.product-type.application") == ".app")
+        #expect(specs.wrapperSuffix("com.apple.product-type.extensionkit-extension") == ".appex")
+    }
+}
+
+/// Compares targets rendered by sochi with targets Xcode 27 created itself (Fixtures/Golden/Xcode-27.0).
+/// Template-specific content (sources, settings) is out of scope here; this checks the wiring.
+@Suite struct GoldenTargetTests {
+    static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+
+    struct Wiring: Equatable, CustomStringConvertible {
+        var productType: String
+        var productFileType: String
+        var productSuffix: String
+        var embedPhase: String
+        var embedSpec: String
+        var embedPath: String
+        var excludesInfoPlist: Bool
+        var hostDependsOnIt: Bool
+        var hasTargetAttributes: Bool
+        var folderBeforeProducts: Bool
+        var description: String { "\(productType) \(productFileType) *\(productSuffix) [\(embedPhase) \(embedSpec) \(embedPath)] plist-excluded:\(excludesInfoPlist) dep:\(hostDependsOnIt) attrs:\(hasTargetAttributes) order:\(folderBeforeProducts)" }
+    }
+
+    static func wiring(of name: String, in text: String) throws -> Wiring {
+        let objects = try PBXProjectFile.objects(in: text, path: name)
+        let (rootID, root) = objects.first { $0.value["isa"] as? String == "PBXProject" }!
+        let (targetID, target) = objects.first { $0.value["isa"] as? String == "PBXNativeTarget" && $0.value["name"] as? String == name }!
+        let host = objects.first { $0.value["isa"] as? String == "PBXNativeTarget" && $0.value["name"] as? String == "HelloApp" }!.value
+        let productID = target["productReference"] as! String
+        let product = objects[productID]!
+        let phase = (host["buildPhases"] as! [String]).compactMap { objects[$0] }.first { phase in
+            (phase["files"] as? [String] ?? []).contains { objects[$0]?["fileRef"] as? String == productID }
+        }
+        let group = objects[(target["fileSystemSynchronizedGroups"] as! [String])[0]]!
+        let exceptions = (group["exceptions"] as? [String] ?? []).compactMap { objects[$0]?["membershipExceptions"] as? [String] }.flatMap { $0 }
+        let mainChildren = objects[root["mainGroup"] as! String]!["children"] as! [String]
+        let groupID = target["fileSystemSynchronizedGroups"] as! [String]
+        let attributes = ((root["attributes"] as? [String: Any])?["TargetAttributes"] as? [String: Any]) ?? [:]
+        let path = product["path"] as! String
+        return Wiring(
+            productType: target["productType"] as! String,
+            productFileType: product["explicitFileType"] as! String,
+            productSuffix: String(path[path.lastIndex(of: ".")!...]),
+            embedPhase: phase?["name"] as? String ?? "-",
+            embedSpec: phase?["dstSubfolderSpec"] as? String ?? "-",
+            embedPath: phase?["dstPath"] as? String ?? "-",
+            excludesInfoPlist: exceptions.contains("Info.plist"),
+            hostDependsOnIt: (host["dependencies"] as! [String]).contains { objects[$0]?["target"] as? String == targetID },
+            hasTargetAttributes: attributes[targetID] != nil,
+            folderBeforeProducts: mainChildren.firstIndex(of: groupID[0])! < mainChildren.firstIndex(of: root["productRefGroup"] as! String)!)
+        _ = rootID
+    }
+
+    @Test(arguments: [
+        ("NotificationService", "com.apple.product-type.app-extension"),
+        ("Share", "com.apple.product-type.app-extension"),
+        ("AppIntents", "com.apple.product-type.extensionkit-extension"),
+        ("AppClip", "com.apple.product-type.application.on-demand-install-capable"),
+    ])
+    func wiringMatchesXcode(name: String, productType: String) async throws {
+        let golden = try String(contentsOf: Self.root.appendingPathComponent(
+            "Fixtures/Golden/Xcode-27.0/AllTemplates/HelloApp.xcodeproj/project.pbxproj"), encoding: .utf8)
+        let projectURL = Self.root.appendingPathComponent("Fixtures/HelloApp/HelloApp.xcodeproj")
+        let file = try PBXProjectFile(projectURL: projectURL)
+        var spec = TargetSpec(name: name, folder: name, productType: productType)
+        spec.infoPlist = Data("<plist/>".utf8)
+        let output = try TargetBuilder.render(spec, in: file, host: file.targets[0], specs: try await XcodeSpecs.load(), toolsVersion: "27.0")
+
+        let ours = try Self.wiring(of: name, in: output.text)
+        let xcodes = try Self.wiring(of: name, in: golden)
+        #expect(ours == xcodes, "sochi: \(ours)\nxcode: \(xcodes)")
+    }
+
+    @Test func explicitFrameworksAreGroupedLikeXcode() async throws {
+        let file = try PBXProjectFile(projectURL: Self.root.appendingPathComponent("Fixtures/HelloApp/HelloApp.xcodeproj"))
+        var spec = TargetSpec(name: "Widget", folder: "Widget", productType: "com.apple.product-type.app-extension")
+        spec.frameworks = ["WidgetKit", "SwiftUI"]
+        let text = try TargetBuilder.render(spec, in: file, host: file.targets[0], specs: try await XcodeSpecs.load(), toolsVersion: "27.0").text
+        let objects = try PBXProjectFile.objects(in: text, path: "x")
+        let group = try #require(objects.values.first { $0["isa"] as? String == "PBXGroup" && $0["name"] as? String == "Frameworks" })
+        let names = (group["children"] as! [String]).compactMap { objects[$0]?["name"] as? String }
+        #expect(names == ["WidgetKit.framework", "SwiftUI.framework"])
+        let main = objects.values.first { $0["isa"] as? String == "PBXGroup" && $0["children"] != nil && $0["name"] == nil && $0["path"] == nil }!
+        let order = (main["children"] as! [String]).map { objects[$0]?["path"] as? String ?? objects[$0]?["name"] as? String ?? "?" }
+        #expect(order == ["HelloApp", "Widget", "Frameworks", "Products"])
+    }
+}

@@ -23,6 +23,17 @@ public enum SochiError: Error, CustomStringConvertible {
     case ambiguousTarget([String])
     case generatedProject(String)
     case mixedEntitlements(target: String, missing: [String])
+    case invalidTargetName(String)
+    case extensionPointRequired(String)
+    case extensionPointNotApplicable(String)
+    case notAnApp(String)
+    case legacyProjectFormat(Int)
+    case targetExists(String)
+    case pathExists(String)
+    case xcodeDataUnavailable(String)
+    case notAnArray(String)
+    case unknownProductType(String, suggestions: [String])
+    case noEmbedRule(String)
 
     public var description: String {
         switch self {
@@ -73,6 +84,29 @@ public enum SochiError: Error, CustomStringConvertible {
             return "This project looks generated (found \(marker)). Edit the generator's manifest instead, or pass --force to edit the .xcodeproj anyway."
         case .mixedEntitlements(let target, let missing):
             return "\(target) has an entitlements file in some configurations but not \(missing.joined(separator: ", ")). Set CODE_SIGN_ENTITLEMENTS for those first so sochi doesn't guess."
+        case .invalidTargetName(let name):
+            return "'\(name)' isn't a valid target name. Use letters and digits, starting with a letter (it becomes a Swift type name)."
+        case .extensionPointRequired(let type):
+            return "\(type) targets need an extension point, e.g. --point com.apple.widgetkit-extension"
+        case .extensionPointNotApplicable(let type):
+            return "--point only applies to extension targets, not \(type)"
+        case .notAnApp(let name):
+            return "\(name) isn't an app target, so it can't host an extension. Pick the app with --target."
+        case .legacyProjectFormat(let version):
+            return "This project uses the pre-Xcode 16 format (objectVersion \(version)), with groups instead of folders. sochi can only add targets to folder-based projects for now."
+        case .targetExists(let name):
+            return "A target named \(name) already exists"
+        case .pathExists(let path):
+            return "\(path) already exists; pick another name or move it"
+        case .notAnArray(let key):
+            return "\(key) isn't an array entitlement; use `sochi entitlements set` instead"
+        case .xcodeDataUnavailable(let what):
+            return "Couldn't read \(what) from the selected Xcode (`xcode-select -p`). Is it a full Xcode install?"
+        case .unknownProductType(let type, let suggestions):
+            let hint = suggestions.isEmpty ? "" : " Did you mean: \(suggestions.joined(separator: ", "))?"
+            return "The selected Xcode doesn't define product type '\(type)'.\(hint)"
+        case .noEmbedRule(let type):
+            return "Xcode doesn't embed '\(type)' products in an app, so sochi won't wire it into one. Create it with --no-embed."
         }
     }
 }

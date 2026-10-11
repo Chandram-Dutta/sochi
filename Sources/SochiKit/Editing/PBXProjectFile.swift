@@ -26,6 +26,11 @@ public struct PBXProjectFile {
     public let targets: [Target]
     /// Paths of top-level groups (relative to the project directory), keyed by group name.
     let topLevelGroups: [String: String]
+    /// Raw objects by ID, for planners that need more than the typed view.
+    let objects: [String: [String: Any]]
+    let rootID: String
+    /// `objectVersion`; 77+ (Xcode 16) supports file-system-synchronized folders.
+    public let objectVersion: Int
 
     public var pbxprojURL: URL { projectURL.appendingPathComponent("project.pbxproj") }
     public var projectDirectory: URL { projectURL.deletingLastPathComponent() }
@@ -42,9 +47,12 @@ public struct PBXProjectFile {
         self.projectURL = projectURL
         self.text = text
         let objects = try Self.objects(in: text, path: projectURL.path)
-        guard let root = objects.values.first(where: { $0["isa"] as? String == "PBXProject" }) else {
+        guard let (rootID, root) = objects.first(where: { $0.value["isa"] as? String == "PBXProject" }) else {
             throw SochiError.unreadableProject(projectURL.path)
         }
+        self.objects = objects
+        self.rootID = rootID
+        objectVersion = text.firstMatch(of: #/objectVersion = (\d+);/#).flatMap { Int($0.1) } ?? 0
 
         targets = (root["targets"] as? [String] ?? []).compactMap { id in
             guard let target = objects[id], target["isa"] as? String == "PBXNativeTarget" else { return nil }

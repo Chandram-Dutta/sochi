@@ -15,6 +15,8 @@ public struct EditPlan: Sendable {
     public internal(set) var notes: [String] = []
     /// Configuration name → the `CODE_SIGN_ENTITLEMENTS` xcodebuild must resolve to after applying.
     var expectedEntitlements: [String: String] = [:]
+    /// Targets `xcodebuild -list` must report after applying.
+    var expectedTargets: [String] = []
 }
 
 /// Edits capabilities the way Xcode's "+ Capability" does, but only touching local files:
@@ -36,7 +38,24 @@ public enum ProjectEditor {
 
     public static func planCapability(
         _ capability: Capability, values: [String], remove: Bool,
-        path: String, target targetName: String?, force: Bool
+        path: String, target: String?, force: Bool
+    ) async throws -> EditPlan {
+        try await planEntitlements(
+            path: path, target: target, force: force, createIfMissing: !remove,
+            label: capability.title, removing: remove
+        ) { current, bundleID in
+            remove
+                ? try Capabilities.removing(capability, values: values, from: current)
+                : Capabilities.adding(try capability.entries(values: values, bundleID: bundleID), to: current)
+        }
+    }
+
+    /// Plans an arbitrary change to a target's entitlements: the generic primitive capabilities build on.
+    /// `mutate` receives the current entitlements and the target's bundle ID and returns the new entitlements.
+    public static func planEntitlements(
+        path: String, target targetName: String?, force: Bool, createIfMissing: Bool,
+        label: String, removing: Bool = false,
+        mutate: ([String: Any], _ bundleID: String) throws -> [String: Any]
     ) async throws -> EditPlan {
         let resolved = try await resolveTarget(path: path, name: targetName, force: force)
         let file = resolved.file
@@ -51,8 +70,8 @@ public enum ProjectEditor {
 
         var files: [URL]
         if entitlementsByConfig.isEmpty {
-            if remove {
-                plan.notes.append("\(target.name) has no entitlements file, so \(capability.title) isn't enabled")
+            guard createIfMissing else {
+                plan.notes.append("\(target.name) has no entitlements file, so there's nothing to remove")
                 return plan
             }
             // Create one next to the target's sources and point every configuration at it.
@@ -74,15 +93,12 @@ public enum ProjectEditor {
             }
         }
 
-        let entries = remove ? [:] : try capability.entries(values: values, bundleID: bundleID)
         for url in files {
             let original = FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
             let current = try original.map { try Entitlements.parse($0, path: url.path) } ?? [:]
-            let updated = remove
-                ? try Capabilities.removing(capability, values: values, from: current)
-                : Capabilities.adding(entries, to: current)
+            let updated = try mutate(current, bundleID)
             if original != nil, NSDictionary(dictionary: updated).isEqual(to: current) {
-                plan.notes.append("\(url.lastPathComponent): \(capability.title) already \(remove ? "absent" : "up to date")")
+                plan.notes.append("\(url.lastPathComponent): \(label) already \(removing ? "absent" : "up to date")")
                 continue
             }
             plan.edits.append(.init(url: url, original: original, updated: try Entitlements.serialize(updated)))
@@ -92,10 +108,20 @@ public enum ProjectEditor {
 
     /// Writes every edit atomically, then verifies with xcodebuild. On any failure, restores all files.
     public static func apply(_ plan: EditPlan) async throws {
+        let fm = FileManager.default
         var written: [EditPlan.FileEdit] = []
+        var createdDirectories: [URL] = []
         do {
             for edit in plan.edits {
-                try FileManager.default.createDirectory(at: edit.url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                // Remember the outermost directory we create, so rollback leaves no empty folders behind.
+                var dir = edit.url.deletingLastPathComponent()
+                var outermostNew: URL?
+                while !fm.fileExists(atPath: dir.path) {
+                    outermostNew = dir
+                    dir = dir.deletingLastPathComponent()
+                }
+                if let outermostNew { createdDirectories.append(outermostNew) }
+                try fm.createDirectory(at: edit.url.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try edit.updated.write(to: edit.url, options: .atomic)
                 written.append(edit)
             }
@@ -105,9 +131,10 @@ public enum ProjectEditor {
                 if let original = edit.original {
                     try? original.write(to: edit.url, options: .atomic)
                 } else {
-                    try? FileManager.default.removeItem(at: edit.url)
+                    try? fm.removeItem(at: edit.url)
                 }
             }
+            for dir in createdDirectories.reversed() { try? fm.removeItem(at: dir) }
             throw error
         }
     }
@@ -116,8 +143,14 @@ public enum ProjectEditor {
         for edit in plan.edits where edit.url.pathExtension == "entitlements" {
             _ = try Entitlements.parse(try Data(contentsOf: edit.url), path: edit.url.path)
         }
-        // Re-parse the project ourselves, then confirm xcodebuild resolves the entitlements we intended.
+        // Re-parse the project ourselves, then confirm xcodebuild sees what we intended.
         _ = try PBXProjectFile(projectURL: plan.projectURL)
+        if !plan.expectedTargets.isEmpty {
+            let output = try await Shell.run(["xcodebuild", "-list", "-json", "-project", plan.projectURL.path])
+            for target in plan.expectedTargets where !output.contains("\"\(target)\"") {
+                throw SochiError.editVerificationFailed("xcodebuild doesn't list target \(target)")
+            }
+        }
         for (config, expected) in plan.expectedEntitlements {
             let settings = try await Xcodebuild.targetSettings(project: plan.projectURL, target: plan.target, configuration: config)
             guard settings["CODE_SIGN_ENTITLEMENTS"] == expected else {

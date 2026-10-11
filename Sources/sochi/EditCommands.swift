@@ -2,12 +2,10 @@ import ArgumentParser
 import Foundation
 import SochiKit
 
+/// Options shared by commands that edit the project.
 struct EditOptions: ParsableArguments {
     @Option(name: .customLong("project"), help: "Project directory, .xcodeproj, or .xcworkspace.")
     var path: String = "."
-
-    @Option(name: .shortAndLong, help: "Target to edit (default: the app target).")
-    var target: String?
 
     @Flag(help: "Show the changes without writing them.")
     var dryRun = false
@@ -16,45 +14,304 @@ struct EditOptions: ParsableArguments {
     var force = false
 }
 
-private let capabilityList = Capabilities.all
-    .map { "  \($0.name.padding(toLength: 30, withPad: " ", startingAt: 0))\($0.title)\($0.hint.map { "  (e.g. \($0))" } ?? "")" }
-    .joined(separator: "\n")
+// MARK: - sochi add
 
 struct Add: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Add a capability to a target, like Xcode's + Capability.",
+        abstract: "Add a capability or a target, like Xcode's + Capability and New Target.",
+        discussion: """
+            Examples:
+              sochi add capability push
+              sochi add capability app-groups group.com.example.shared
+              sochi add target Weather --type app-extension --point com.apple.widgetkit-extension
+            """,
+        subcommands: [AddCapability.self, AddTarget.self])
+}
+
+struct AddCapability: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "capability",
+        abstract: "Add a capability to a target.",
         discussion: "Capabilities:\n\(capabilityList)\n\nThe next build registers it with Apple through automatic signing.")
 
     @Argument(help: "Capability name, e.g. push or app-groups.")
-    var capability: String
+    var name: String
 
     @Argument(help: "Values for list capabilities, e.g. group IDs or domains.")
     var values: [String] = []
 
+    @Option(name: .shortAndLong, help: "Target to edit (default: the app target).")
+    var target: String?
+
     @OptionGroup var options: EditOptions
 
     func run() async throws {
-        try await reportingErrors { try await editCapability(capability, values: values, remove: false, options: options) }
+        try await reportingErrors {
+            let capability = try Capabilities.named(name)
+            try await runPlan(options: options, success: "added \(Terminal.bold(capability.title))", nextStep: signingHint) {
+                try await ProjectEditor.planCapability(
+                    capability, values: values, remove: false, path: options.path, target: target, force: options.force)
+            }
+        }
     }
 }
 
+struct AddTarget: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "target",
+        abstract: "Add a target of any product type the selected Xcode defines, embedded in the app.",
+        discussion: """
+            The product type and extension point are Apple's own identifiers, so every type Xcode supports works
+            without sochi knowing about it. How the product is embedded comes from Xcode's build specifications.
+
+            Examples:
+              sochi add target Weather --type app-extension --point com.apple.widgetkit-extension
+              sochi add target Shortcuts --type extensionkit-extension --point com.apple.appintents-extension
+              sochi add target Rich --type app-extension --point com.apple.usernotifications.service
+              sochi add target Kit --type framework --no-embed
+            """)
+
+    @Argument(help: "Target name; also its folder and the suffix of its bundle ID.")
+    var name: String
+
+    @Option(help: ArgumentHelp("Product type, e.g. app-extension or com.apple.product-type.app-extension.", valueName: "type"))
+    var type: String
+
+    @Option(help: ArgumentHelp("Extension point identifier, for extension product types.", valueName: "id"))
+    var point: String?
+
+    @Flag(help: "Don't embed the product in the app.")
+    var noEmbed = false
+
+    @Option(help: "App target that hosts the new target (default: the app target).")
+    var host: String?
+
+    @OptionGroup var options: EditOptions
+
+    func run() async throws {
+        try await reportingErrors {
+            let request = GenericTargetRequest(name: name, productType: type, extensionPoint: point, embed: !noEmbed)
+            try await runPlan(
+                options: options, success: "added target \(Terminal.bold(name))",
+                nextStep: "Build with `sochi run`; automatic signing registers its bundle ID with Apple."
+            ) {
+                try await ProjectEditor.planGenericTarget(request, path: options.path, host: host, force: options.force)
+            }
+        }
+    }
+}
+
+// MARK: - sochi remove
+
 struct Remove: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
+        abstract: "Remove a capability.",
+        discussion: "Example:\n  sochi remove capability app-groups group.com.example.old",
+        subcommands: [RemoveCapability.self])
+}
+
+struct RemoveCapability: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "capability",
         abstract: "Remove a capability (or specific values of one) from a target.",
         discussion: "Capabilities:\n\(capabilityList)")
 
     @Argument(help: "Capability name.")
-    var capability: String
+    var name: String
 
     @Argument(help: "Remove only these values, keeping the rest.")
     var values: [String] = []
 
+    @Option(name: .shortAndLong, help: "Target to edit (default: the app target).")
+    var target: String?
+
     @OptionGroup var options: EditOptions
 
     func run() async throws {
-        try await reportingErrors { try await editCapability(capability, values: values, remove: true, options: options) }
+        try await reportingErrors {
+            let capability = try Capabilities.named(name)
+            try await runPlan(options: options, success: "removed \(Terminal.bold(capability.title))", nextStep: nil) {
+                try await ProjectEditor.planCapability(
+                    capability, values: values, remove: true, path: options.path, target: target, force: options.force)
+            }
+        }
     }
 }
+
+// MARK: - sochi entitlements
+
+struct EntitlementsCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "entitlements",
+        abstract: "Show or edit any entitlement directly.",
+        discussion: """
+            Works for every entitlement, including ones sochi has no friendly name for.
+
+            Examples:
+              sochi entitlements
+              sochi entitlements set com.apple.developer.healthkit true
+              sochi entitlements add com.apple.security.application-groups group.com.example.shared
+              sochi entitlements remove com.apple.developer.healthkit
+            """,
+        subcommands: [ShowEntitlements.self, SetEntitlement.self, AddEntitlementValues.self, RemoveEntitlement.self],
+        defaultSubcommand: ShowEntitlements.self)
+}
+
+struct ShowEntitlements: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(commandName: "show", abstract: "Print a target's entitlements.")
+
+    @Option(name: .customLong("project"), help: "Project directory, .xcodeproj, or .xcworkspace.")
+    var path: String = "."
+
+    @Option(name: .shortAndLong, help: "Target (default: the app target).")
+    var target: String?
+
+    func run() async throws {
+        try await reportingErrors {
+            Terminal.status("  \(Terminal.dim("reading project…"))")
+            let (target, files) = try await ProjectEditor.entitlements(path: path, target: target)
+            Terminal.clearStatus()
+            Terminal.print(Terminal.bold(target))
+            if files.isEmpty { Terminal.print(Terminal.dim("  no entitlements file")) }
+            for (url, entitlements) in files {
+                Terminal.print(Terminal.dim("  \(relativePath(url))"))
+                for key in entitlements.keys.sorted() {
+                    Terminal.print("  \(key) = \(Terminal.cyan(describe(entitlements[key]!)))")
+                }
+            }
+        }
+    }
+}
+
+struct SetEntitlement: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "set",
+        abstract: "Set an entitlement. One value of true/false is a boolean, several values (or --array) an array.")
+
+    @Argument(help: "Entitlement key.")
+    var key: String
+
+    @Argument(help: "Value(s).")
+    var values: [String]
+
+    @Flag(help: "Store as an array even with one value.")
+    var array = false
+
+    @Flag(help: "Store true/false as a string rather than a boolean.")
+    var string = false
+
+    @Option(name: .shortAndLong, help: "Target (default: the app target).")
+    var target: String?
+
+    @OptionGroup var options: EditOptions
+
+    func run() async throws {
+        try await reportingErrors {
+            let value: EntitlementValue
+            if array || values.count > 1 {
+                value = .array(values)
+            } else if !string, ["true", "false"].contains(values[0].lowercased()) {
+                value = .bool(values[0].lowercased() == "true")
+            } else {
+                value = .string(values[0])
+            }
+            try await runPlan(options: options, success: "set \(Terminal.bold(key))", nextStep: signingHint) {
+                try await ProjectEditor.planEntitlements(
+                    path: options.path, target: target, force: options.force, createIfMissing: true, label: key
+                ) { current, _ in
+                    var updated = current
+                    updated[key] = value.object
+                    return updated
+                }
+            }
+        }
+    }
+}
+
+struct AddEntitlementValues: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "add", abstract: "Add values to an array entitlement, creating it if needed.")
+
+    @Argument(help: "Entitlement key.")
+    var key: String
+
+    @Argument(help: "Values to add.")
+    var values: [String]
+
+    @Option(name: .shortAndLong, help: "Target (default: the app target).")
+    var target: String?
+
+    @OptionGroup var options: EditOptions
+
+    func run() async throws {
+        try await reportingErrors {
+            try await runPlan(options: options, success: "updated \(Terminal.bold(key))", nextStep: signingHint) {
+                try await ProjectEditor.planEntitlements(
+                    path: options.path, target: target, force: options.force, createIfMissing: true, label: key
+                ) { current, _ in
+                    guard current[key] == nil || current[key] is [Any] else { throw SochiError.notAnArray(key) }
+                    let existing = current[key] as? [String] ?? []
+                    var updated = current
+                    updated[key] = existing + values.filter { !existing.contains($0) }
+                    return updated
+                }
+            }
+        }
+    }
+}
+
+struct RemoveEntitlement: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "remove", abstract: "Remove an entitlement, or only some values of an array entitlement.")
+
+    @Argument(help: "Entitlement key.")
+    var key: String
+
+    @Argument(help: "Remove only these values.")
+    var values: [String] = []
+
+    @Option(name: .shortAndLong, help: "Target (default: the app target).")
+    var target: String?
+
+    @OptionGroup var options: EditOptions
+
+    func run() async throws {
+        try await reportingErrors {
+            try await runPlan(options: options, success: "updated \(Terminal.bold(key))", nextStep: nil) {
+                try await ProjectEditor.planEntitlements(
+                    path: options.path, target: target, force: options.force, createIfMissing: false,
+                    label: key, removing: true
+                ) { current, _ in
+                    var updated = current
+                    if values.isEmpty {
+                        updated[key] = nil
+                    } else {
+                        let remaining = (current[key] as? [String] ?? []).filter { !values.contains($0) }
+                        updated[key] = remaining.isEmpty ? nil : remaining
+                    }
+                    return updated
+                }
+            }
+        }
+    }
+}
+
+/// A parsed command-line entitlement value (Sendable, unlike `Any`).
+private enum EntitlementValue: Sendable {
+    case bool(Bool)
+    case string(String)
+    case array([String])
+
+    var object: Any {
+        switch self {
+        case .bool(let b): b
+        case .string(let s): s
+        case .array(let a): a
+        }
+    }
+}
+
+// MARK: - sochi capabilities
 
 struct CapabilitiesCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -87,26 +344,39 @@ struct CapabilitiesCommand: AsyncParsableCommand {
             let available = Capabilities.all.filter { !enabled.contains($0.name) }
             if !available.isEmpty {
                 Terminal.print()
-                Terminal.print(Terminal.dim("available: \(available.map(\.name).joined(separator: ", "))  ·  sochi add <name>"))
+                Terminal.print(Terminal.dim("available: \(available.map(\.name).joined(separator: ", "))  ·  sochi add capability <name>"))
             }
         }
     }
 }
 
-private func editCapability(_ name: String, values: [String], remove: Bool, options: EditOptions) async throws {
-    let capability = try Capabilities.named(name)
-    Terminal.status("  \(Terminal.dim("reading project…"))")
-    let plan = try await ProjectEditor.planCapability(
-        capability, values: values, remove: remove, path: options.path, target: options.target, force: options.force)
-    Terminal.clearStatus()
+// MARK: - Shared
 
+private let capabilityList = Capabilities.all
+    .map { "  \($0.name.padding(toLength: 30, withPad: " ", startingAt: 0))\($0.title)\($0.hint.map { "  (e.g. \($0))" } ?? "")" }
+    .joined(separator: "\n")
+
+private let signingHint = "Apple's side (App ID, profile) is set up by automatic signing on the next `sochi run`."
+
+/// Plans, shows the diff, then (unless dry-running) writes and verifies.
+private func runPlan(
+    options: EditOptions, success: String, nextStep: String?, plan makePlan: () async throws -> EditPlan
+) async throws {
+    Terminal.status("  \(Terminal.dim("reading project…"))")
+    let plan = try await makePlan()
+    Terminal.clearStatus()
     for note in plan.notes { Terminal.print(Terminal.dim("  \(note)")) }
     guard !plan.edits.isEmpty else {
         Terminal.success("nothing to change")
         return
     }
-    for edit in plan.edits { Terminal.print(try await diff(edit)) }
-
+    for edit in plan.edits {
+        if edit.original == nil, edit.url.pathExtension != "entitlements" {
+            Terminal.print(Terminal.green("+ \(relativePath(edit.url))"))
+        } else {
+            Terminal.print(try await diff(edit))
+        }
+    }
     if options.dryRun {
         Terminal.print(Terminal.dim("dry run: no files written"))
         return
@@ -114,9 +384,16 @@ private func editCapability(_ name: String, values: [String], remove: Bool, opti
     Terminal.status("  \(Terminal.dim("writing and verifying…"))")
     try await ProjectEditor.apply(plan)
     Terminal.clearStatus()
-    Terminal.success("\(remove ? "removed" : "added") \(Terminal.bold(capability.title)) \(remove ? "from" : "to") \(plan.target)")
-    if !remove {
-        Terminal.print(Terminal.dim("  Apple's side (App ID, profile) is set up by automatic signing on the next `sochi run`."))
+    Terminal.success("\(success) \(Terminal.dim("in \(plan.target)"))")
+    if let nextStep { Terminal.print(Terminal.dim("  \(nextStep)")) }
+}
+
+private func describe(_ value: Any) -> String {
+    switch value {
+    case let b as Bool: return b ? "true" : "false"
+    case let a as [Any]: return "[" + a.map(describe).joined(separator: ", ") + "]"
+    case let d as [String: Any]: return "{" + d.keys.sorted().map { "\($0): \(describe(d[$0]!))" }.joined(separator: ", ") + "}"
+    default: return "\(value)"
     }
 }
 
@@ -131,7 +408,7 @@ private func diff(_ edit: EditPlan.FileEdit) async throws -> String {
     try edit.updated.write(to: after)
 
     let path = relativePath(edit.url)
-    let lines = Box()
+    let lines = LineBuffer()
     _ = try await Shell.stream([
         "diff", "-u", "--label", edit.original == nil ? "/dev/null" : "a/\(path)", "--label", "b/\(path)",
         before.path, after.path,
@@ -151,7 +428,7 @@ private func relativePath(_ url: URL) -> String {
 }
 
 /// Collects lines from a streaming callback; reads happen only after the stream completes.
-private final class Box: @unchecked Sendable {
+private final class LineBuffer: @unchecked Sendable {
     var value: [String] = []
     func append(_ line: String) { value.append(line) }
 }

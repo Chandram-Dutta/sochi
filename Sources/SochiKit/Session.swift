@@ -132,7 +132,7 @@ public struct Session: Sendable {
 
     var buildArguments: [String] {
         var args = settingsArguments
-        if destination.isDevice { args.append("-allowProvisioningUpdates") }
+        if destination.isDevice { args += ["-allowProvisioningUpdates", "-allowProvisioningDeviceRegistration"] }
         if let developmentTeam { args.append("DEVELOPMENT_TEAM=\(developmentTeam)") }
         return args
     }
