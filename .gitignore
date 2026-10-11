@@ -1,0 +1,11 @@
+# Planning docs (kept local)
+docs/
+
+# SwiftPM / Xcode
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcscmblueprint
+
+.DS_Store
