@@ -60,6 +60,21 @@ public enum Xcodebuild {
             developmentTeam: app.buildSettings["DEVELOPMENT_TEAM"] ?? "")
     }
 
+    /// Resolved build settings for one target and configuration, including values inherited from `.xcconfig` files.
+    public static func targetSettings(project: URL, target: String, configuration: String) async throws -> [String: String] {
+        let output = try await Shell.run([
+            "xcodebuild", "-showBuildSettings", "-json", "-project", project.path,
+            "-target", target, "-configuration", configuration,
+        ])
+        struct Entry: Decodable { let target: String; let buildSettings: [String: String] }
+        let entries = try JSONDecoder().decode(
+            [Entry].self, from: jsonPayload(output, command: "xcodebuild -showBuildSettings -target"))
+        guard let entry = entries.first(where: { $0.target == target }) ?? entries.first else {
+            throw SochiError.unexpectedOutput(command: "xcodebuild -showBuildSettings -target \(target)")
+        }
+        return entry.buildSettings
+    }
+
     /// xcodebuild sometimes prints log lines (which can contain brackets, e.g. `xcodebuild[123:456]`)
     /// before its JSON; skip to the first line that opens an object or array.
     private static func jsonPayload(_ output: String, command: String) throws -> Data {

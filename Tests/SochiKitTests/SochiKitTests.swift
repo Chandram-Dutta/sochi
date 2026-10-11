@@ -224,3 +224,120 @@ import Testing
         #expect(throws: SochiError.self) { try AppBundle.verify(product, for: device) }
     }
 }
+
+@Suite struct PBXEditorTests {
+    let pbx = """
+    // !$*UTF8*$!
+    {
+    \tarchiveVersion = 1;
+    \tobjects = {
+    \t\tC1 /* Debug */ = {
+    \t\t\tisa = XCBuildConfiguration;
+    \t\t\tbuildSettings = {
+    \t\t\t\tALWAYS_SEARCH_USER_PATHS = NO;
+    \t\t\t\tLD_RUNPATH_SEARCH_PATHS = (
+    \t\t\t\t\t"$(inherited)",
+    \t\t\t\t\t"@executable_path/Frameworks",
+    \t\t\t\t);
+    \t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";
+    \t\t\t};
+    \t\t\tname = Debug;
+    \t\t};
+    \t\tC2 /* Release */ = {
+    \t\t\tisa = XCBuildConfiguration;
+    \t\t\tbuildSettings = {};
+    \t\t\tname = Release;
+    \t\t};
+    \t};
+    \trootObject = C1;
+    }
+    """
+
+    @Test func insertsAlphabeticallyAndExpandsEmptyBlocks() throws {
+        let result = try PBXEditor.setBuildSetting("CODE_SIGN_ENTITLEMENTS", to: "App/App.entitlements", configurations: ["C1", "C2"], in: pbx)
+        let lines = result.components(separatedBy: "\n")
+        let debug = lines.firstIndex(of: "\t\t\t\tCODE_SIGN_ENTITLEMENTS = App/App.entitlements;")!
+        #expect(lines[debug - 1].contains("ALWAYS_SEARCH_USER_PATHS"))
+        #expect(lines[debug + 1].contains("LD_RUNPATH_SEARCH_PATHS"))
+        #expect(result.contains("\t\t\tbuildSettings = {\n\t\t\t\tCODE_SIGN_ENTITLEMENTS = App/App.entitlements;\n\t\t\t};\n\t\t\tname = Release;"))
+        // Nothing else changed: exactly the added and expanded lines differ.
+        #expect(lines.count == pbx.components(separatedBy: "\n").count + 3)
+    }
+
+    @Test func insertsAfterMultilineValuesAndReplacesExisting() throws {
+        let once = try PBXEditor.setBuildSetting("MARKETING_VERSION", to: "1.0", configurations: ["C1"], in: pbx)
+        #expect(once.contains("\t\t\t\t);\n\t\t\t\tMARKETING_VERSION = 1.0;\n\t\t\t\tPRODUCT_NAME"))
+        let twice = try PBXEditor.setBuildSetting("MARKETING_VERSION", to: "2.0", configurations: ["C1"], in: once)
+        #expect(twice.components(separatedBy: "MARKETING_VERSION").count == 2)
+        #expect(twice.contains("MARKETING_VERSION = 2.0;"))
+    }
+
+    @Test func quotesLikeXcode() {
+        #expect(PBXEditor.quote("App/App.entitlements") == "App/App.entitlements")
+        #expect(PBXEditor.quote("My App/App.entitlements") == "\"My App/App.entitlements\"")
+        #expect(PBXEditor.quote("$(SRCROOT)/App.entitlements") == "\"$(SRCROOT)/App.entitlements\"")
+        #expect(PBXEditor.quote("") == "\"\"")
+    }
+
+    @Test func refusesUnknownConfiguration() {
+        #expect(throws: SochiError.self) { try PBXEditor.setBuildSetting("A", to: "B", configurations: ["NOPE"], in: pbx) }
+    }
+}
+
+@Suite struct CapabilityTests {
+    @Test func listsUnionAndDefaultFromBundleID() throws {
+        let groups = try Capabilities.named("app-group")
+        #expect(try groups.entries(values: [], bundleID: "dev.app") == ["com.apple.security.application-groups": .array(["group.dev.app"])])
+        let merged = Capabilities.adding(try groups.entries(values: ["group.b", "group.a"], bundleID: "x"),
+                                         to: ["com.apple.security.application-groups": ["group.a"]])
+        #expect(merged["com.apple.security.application-groups"] as? [String] == ["group.a", "group.b"])
+        #expect(throws: SochiError.self) { try groups.entries(values: ["nogroupprefix"], bundleID: "x") }
+    }
+
+    @Test func validatesAndNormalizes() throws {
+        #expect(throws: SochiError.self) { try Capabilities.named("associated-domains").entries(values: [], bundleID: "x") }
+        #expect(throws: SochiError.self) { try Capabilities.named("associated-domains").entries(values: ["example.com"], bundleID: "x") }
+        #expect(throws: SochiError.self) { try Capabilities.named("push").entries(values: ["extra"], bundleID: "x") }
+        #expect(try Capabilities.named("keychain").entries(values: ["dev.shared"], bundleID: "x")
+                == ["keychain-access-groups": .array(["$(AppIdentifierPrefix)dev.shared"])])
+        #expect(throws: SochiError.self) { try Capabilities.named("teleportation") }
+    }
+
+    @Test func removesValuesOrWholeCapability() throws {
+        let groups = try Capabilities.named("app-groups")
+        let start: [String: Any] = ["com.apple.security.application-groups": ["group.a", "group.b"], "aps-environment": "development"]
+        let partial = try Capabilities.removing(groups, values: ["group.a"], from: start)
+        #expect(partial["com.apple.security.application-groups"] as? [String] == ["group.b"])
+        let emptied = try Capabilities.removing(groups, values: ["group.b"], from: partial)
+        #expect(emptied["com.apple.security.application-groups"] == nil)
+        #expect(emptied["aps-environment"] as? String == "development")
+        let health = try Capabilities.removing(try Capabilities.named("healthkit"), values: [],
+            from: ["com.apple.developer.healthkit": true, "com.apple.developer.healthkit.access": [String]()])
+        #expect(health.isEmpty)
+    }
+
+    @Test func detectsKnownAndUnknownKeys() {
+        let (known, unknown) = Capabilities.detect(in: ["aps-environment": "development", "com.apple.developer.custom": true])
+        #expect(known.map(\.0.name) == ["push"])
+        #expect(unknown == ["com.apple.developer.custom"])
+    }
+
+    @Test func refusesGeneratedProjects() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sochi-gen-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        #expect(ProjectEditor.generatorMarker(in: dir) == nil)
+        try Data().write(to: dir.appendingPathComponent("project.yml"))
+        #expect(ProjectEditor.generatorMarker(in: dir) == "project.yml")
+    }
+
+    @Test func readsTargetsFromFixture() throws {
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/HelloApp/HelloApp.xcodeproj")
+        let file = try PBXProjectFile(projectURL: fixture)
+        let app = try #require(file.targets.first)
+        #expect(app.name == "HelloApp" && app.isApplication)
+        #expect(app.configurations.map(\.name) == ["Debug", "Release"])
+        #expect(file.sourceFolder(of: app) == "HelloApp")
+    }
+}

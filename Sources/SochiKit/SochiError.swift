@@ -15,6 +15,14 @@ public enum SochiError: Error, CustomStringConvertible {
     case noSigningTeam
     case ambiguousTeam([Team])
     case productMismatch(String)
+    case unreadableProject(String)
+    case editVerificationFailed(String)
+    case unknownCapability(String, available: [String])
+    case invalidCapabilityValue(String, String)
+    case unknownTarget(String, available: [String])
+    case ambiguousTarget([String])
+    case generatedProject(String)
+    case mixedEntitlements(target: String, missing: [String])
 
     public var description: String {
         switch self {
@@ -49,6 +57,22 @@ public enum SochiError: Error, CustomStringConvertible {
             return "The project has no development team. Choose one with --team or SOCHI_TEAM: \(list)"
         case .productMismatch(let detail):
             return "Refusing to install: \(detail). Try `--fresh`, or report this as a sochi bug."
+        case .unreadableProject(let path):
+            return "Couldn't read \(path)"
+        case .editVerificationFailed(let detail):
+            return "Edit didn't verify (\(detail)). No files were changed."
+        case .unknownCapability(let name, let available):
+            return "Unknown capability '\(name)'. Available: \(available.joined(separator: ", "))"
+        case .invalidCapabilityValue(let name, let reason):
+            return "\(name) \(reason)"
+        case .unknownTarget(let name, let available):
+            return "No target named '\(name)'. Available: \(available.joined(separator: ", "))"
+        case .ambiguousTarget(let targets):
+            return "Several targets could be meant (\(targets.joined(separator: ", "))). Pick one with --target."
+        case .generatedProject(let marker):
+            return "This project looks generated (found \(marker)). Edit the generator's manifest instead, or pass --force to edit the .xcodeproj anyway."
+        case .mixedEntitlements(let target, let missing):
+            return "\(target) has an entitlements file in some configurations but not \(missing.joined(separator: ", ")). Set CODE_SIGN_ENTITLEMENTS for those first so sochi doesn't guess."
         }
     }
 }
