@@ -23,7 +23,7 @@ struct Add: AsyncParsableCommand {
             Examples:
               sochi add capability push-notifications
               sochi add capability associated-domains applinks:example.com
-              sochi add target Weather --type app-extension --point com.apple.widgetkit-extension
+              sochi add target widget-extension Weather
             """,
         subcommands: [AddCapability.self, AddTarget.self])
 }
@@ -67,28 +67,36 @@ struct AddCapability: AsyncParsableCommand {
 struct AddTarget: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "target",
-        abstract: "Add a target of any product type the selected Xcode defines, embedded in the app.",
+        abstract: "Add a target from one of Xcode's templates, or of any product type (--type).",
         discussion: """
-            The product type and extension point are Apple's own identifiers, so every type Xcode supports works
-            without sochi knowing about it. How the product is embedded comes from Xcode's build specifications.
+            With a template, sochi runs the selected Xcode's own File › New › Target template: the same files,
+            Info.plist and settings Xcode would create, except that the Swift version, deployment target and
+            versioning follow the app. List templates and their options with `sochi templates`.
+
+            Without a template, --type takes any product type the selected Xcode defines, and --point an
+            extension point identifier.
 
             Examples:
-              sochi add target Weather --type app-extension --point com.apple.widgetkit-extension
+              sochi add target widget-extension Weather
+              sochi add target widget-extension Weather --option includeLiveActivity=false
+              sochi add target "Notification Service Extension" Rich
               sochi add target Shortcuts --type extensionkit-extension --point com.apple.appintents-extension
-              sochi add target Rich --type app-extension --point com.apple.usernotifications.service
               sochi add target Kit --type framework --no-embed
             """)
 
-    @Argument(help: "Target name; also its folder and the suffix of its bundle ID.")
-    var name: String
+    @Argument(help: "<template> <Name>, or just <Name> with --type.")
+    var arguments: [String]
+
+    @Option(name: .customLong("option"), help: ArgumentHelp("Template option, e.g. includeControl=false (repeatable).", valueName: "key=value"))
+    var templateOptions: [String] = []
 
     @Option(help: ArgumentHelp("Product type, e.g. app-extension or com.apple.product-type.app-extension.", valueName: "type"))
-    var type: String
+    var type: String?
 
-    @Option(help: ArgumentHelp("Extension point identifier, for extension product types.", valueName: "id"))
+    @Option(help: ArgumentHelp("Extension point identifier, with --type.", valueName: "id"))
     var point: String?
 
-    @Flag(help: "Don't embed the product in the app.")
+    @Flag(help: "Don't embed the product in the app (with --type).")
     var noEmbed = false
 
     @Option(help: "App target that hosts the new target (default: the app target).")
@@ -96,15 +104,62 @@ struct AddTarget: AsyncParsableCommand {
 
     @OptionGroup var options: EditOptions
 
+    func validate() throws {
+        if type != nil {
+            guard arguments.count == 1 else { throw ValidationError("With --type, pass only the target name.") }
+        } else {
+            guard arguments.count == 2 else {
+                throw ValidationError("Pass a template and a name, e.g. sochi add target widget-extension Weather (see `sochi templates`).")
+            }
+            if point != nil || noEmbed { throw ValidationError("--point and --no-embed apply only with --type.") }
+        }
+    }
+
     func run() async throws {
         try await reportingErrors {
-            let request = GenericTargetRequest(name: name, productType: type, extensionPoint: point, embed: !noEmbed)
-            try await runPlan(
-                options: options, success: "added target \(Terminal.bold(name))",
-                nextStep: "Build with `sochi run`; automatic signing registers its bundle ID with Apple."
-            ) {
-                try await ProjectEditor.planGenericTarget(request, path: options.path, host: host, force: options.force)
+            let next = "Build with `sochi run`; automatic signing registers its bundle ID with Apple."
+            if let type {
+                let request = GenericTargetRequest(name: arguments[0], productType: type, extensionPoint: point, embed: !noEmbed)
+                try await runPlan(options: options, success: "added target \(Terminal.bold(arguments[0]))", nextStep: next) {
+                    try await ProjectEditor.planGenericTarget(request, path: options.path, host: host, force: options.force)
+                }
+                return
             }
+            var parsed: [String: String] = [:]
+            for option in templateOptions {
+                let parts = option.split(separator: "=", maxSplits: 1).map(String.init)
+                guard parts.count == 2 else { throw ValidationError("Options look like key=value, got '\(option)'") }
+                parsed[parts[0]] = parts[1]
+            }
+            try await runPlan(options: options, success: "added target from \(Terminal.bold(arguments[0]))", nextStep: next) {
+                try await ProjectEditor.planTemplateTarget(
+                    template: arguments[0], name: arguments[1], options: parsed, path: options.path, host: host, force: options.force)
+            }
+        }
+    }
+}
+
+struct Templates: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "List the selected Xcode's target templates and their options.")
+
+    func run() async throws {
+        try await reportingErrors {
+            Terminal.status("  \(Terminal.dim("reading Xcode templates…"))")
+            let templates = try await ProjectEditor.listTemplates()
+            Terminal.clearStatus()
+            var category = ""
+            for (template, options) in templates {
+                if template.category != category {
+                    category = template.category
+                    Terminal.print(Terminal.bold(category))
+                }
+                let platform = template.platformFolder == "iOS" ? "" : Terminal.dim("  (\(template.platformFolder))")
+                let slug = template.slug.count < 42 ? template.slug.padding(toLength: 42, withPad: " ", startingAt: 0) : template.slug + "  "
+                Terminal.print("  \(slug)\(template.name)\(platform)")
+                if !options.isEmpty { Terminal.print(Terminal.dim("    --option \(options.joined(separator: "  --option "))")) }
+            }
+            Terminal.print(Terminal.dim("\n\(templates.count) templates  ·  sochi add target <template> <Name>"))
         }
     }
 }

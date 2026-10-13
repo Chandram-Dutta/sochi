@@ -37,6 +37,12 @@ public enum SochiError: Error, CustomStringConvertible {
     case capabilityNeedsChoice(capability: String, key: String, options: [String])
     case capabilityHasNoEntitlements(String)
     case capabilityUnsupported(String, String)
+    case unknownTemplate(String)
+    case ambiguousTemplate(String, candidates: [String])
+    case unsupportedTemplate(String, String)
+    case templateNeedsHost(String)
+    case unknownTemplateOption(String, available: [String])
+    case unsupportedTemplateMacro(String)
     case unknownProductType(String, suggestions: [String])
     case noEmbedRule(String)
 
@@ -114,6 +120,18 @@ public enum SochiError: Error, CustomStringConvertible {
             return "\(name) has no entitlements to write; it's enabled on Apple's side only (automatic signing handles it)"
         case .capabilityUnsupported(let name, let reason):
             return "\(name): \(reason)"
+        case .unknownTemplate(let query):
+            return "No target template matches '\(query)'. Run `sochi templates` to list them."
+        case .ambiguousTemplate(let query, let candidates):
+            return "'\(query)' matches several templates: \(candidates.joined(separator: ", ")). Use the full name."
+        case .unsupportedTemplate(let name, let reason):
+            return "sochi can't run the \(name) template yet: \(reason). Use `sochi add target <Name> --type …` instead."
+        case .templateNeedsHost(let name):
+            return "The \(name) template embeds in an app; pass the app with --host"
+        case .unknownTemplateOption(let option, let available):
+            return "Unknown option '\(option)'." + (available.isEmpty ? " This template has no options." : " Options: \(available.joined(separator: ", "))")
+        case .unsupportedTemplateMacro(let name):
+            return "The template uses a macro sochi doesn't know (___\(name)___); no files were written."
         case .ambiguousCapability(let query, let candidates):
             return "'\(query)' matches several capabilities: \(candidates.joined(separator: ", ")). Use the full name."
         case .notAnArray(let key):

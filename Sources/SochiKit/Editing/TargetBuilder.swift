@@ -297,6 +297,14 @@ enum TargetBuilder {
 }
 
 extension PBXProjectFile {
+    /// The project-level build settings of each configuration, by name.
+    var projectBuildSettings: [String: [String: Any]] {
+        let list = objects[rootID]?["buildConfigurationList"] as? String ?? ""
+        return (objects[list]?["buildConfigurations"] as? [String] ?? []).reduce(into: [:]) { result, id in
+            if let name = objects[id]?["name"] as? String { result[name] = objects[id]?["buildSettings"] as? [String: Any] ?? [:] }
+        }
+    }
+
     /// Configuration names of the project itself, for targets created without a host.
     var projectConfigurationNames: [String] {
         let list = objects[rootID]?["buildConfigurationList"] as? String ?? ""

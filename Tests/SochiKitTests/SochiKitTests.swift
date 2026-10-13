@@ -390,6 +390,9 @@ import Testing
         #expect(specs.embedRule("com.apple.product-type.application") == nil)
         #expect(specs.wrapperSuffix("com.apple.product-type.application") == ".app")
         #expect(specs.wrapperSuffix("com.apple.product-type.extensionkit-extension") == ".appex")
+        // List-typed settings, which Xcode writes as arrays.
+        #expect(specs.listSettings.isSuperset(of: ["LD_RUNPATH_SEARCH_PATHS", "GCC_PREPROCESSOR_DEFINITIONS", "OTHER_LDFLAGS"]))
+        #expect(!specs.listSettings.contains("PRODUCT_NAME"))
     }
 }
 
@@ -496,5 +499,73 @@ import Testing
         let (enabled, unclaimed) = catalog.detect(in: ["aps-environment": "development", "com.example.custom": true])
         #expect(enabled.map(\.id).contains("PUSH_NOTIFICATIONS"))
         #expect(unclaimed == ["com.example.custom"])
+    }
+}
+
+/// Runs Xcode's own templates through sochi's engine and compares with what Xcode 27 produced itself
+/// (Fixtures/Golden/Xcode-27.0/AllTemplates, made with each template's defaults).
+@Suite struct GoldenTemplateTests {
+    static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    /// Not template content: sochi takes these from the host app (the signing style comes from Xcode's signing UI).
+    static let hostAligned: Set<String> = ["SWIFT_VERSION", "IPHONEOS_DEPLOYMENT_TARGET", "CODE_SIGN_STYLE"]
+
+    @Test(arguments: [
+        ("Widget Extension", "Widget", "WidgetExtension"),
+        ("Share Extension", "Share", "Share"),
+        ("Notification Service Extension", "NotificationService", "NotificationService"),
+        ("App Intents Extension", "AppIntents", "AppIntents"),
+        ("App Clip", "AppClip", "AppClip"),
+    ])
+    func matchesXcode(template: String, name: String, targetName: String) async throws {
+        let index = try await TemplateIndex.load()
+        let file = try PBXProjectFile(projectURL: Self.root.appendingPathComponent("Fixtures/HelloApp/HelloApp.xcodeproj"))
+        let context = TemplateContext(
+            name: name, projectName: "HelloApp", hostBundleIdentifier: "dev.sochi.HelloApp", hostProductName: "HelloApp",
+            hostProductType: "com.apple.product-type.application", developmentTeam: nil, fullUserName: "Someone")
+        let output = try TemplateEngine(index: index, specs: try await XcodeSpecs.load()).instantiate(
+            try index.find(template), context: context, projectSettings: file.projectBuildSettings, configurations: ["Debug", "Release"])
+        #expect(output.targetName == targetName)
+
+        // Files, byte for byte apart from the "Created by" line.
+        let goldenDir = Self.root.appendingPathComponent("Fixtures/Golden/Xcode-27.0/AllTemplates/\(name)")
+        var golden: [String: Data] = [:]
+        let walker = FileManager.default.enumerator(at: goldenDir, includingPropertiesForKeys: [.isDirectoryKey])!
+        while let url = walker.nextObject() as? URL {
+            guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true, url.lastPathComponent != "Info.plist" else { continue }
+            golden[url.path.replacingOccurrences(of: goldenDir.path + "/", with: "")] = try Data(contentsOf: url)
+        }
+        #expect(Set(output.files.keys) == Set(golden.keys))
+        func normalized(_ data: Data?) -> String {
+            (data.flatMap { String(data: $0, encoding: .utf8) } ?? "<binary>").replacing(#/Created by .* on .*\./#, with: "Created by X on D.")
+        }
+        for (path, data) in golden {
+            #expect(normalized(output.files[path]) == normalized(data), "\(path) differs")
+        }
+
+        // Info.plist.
+        let goldenInfo = try PropertyListSerialization.propertyList(from: Data(contentsOf: goldenDir.appendingPathComponent("Info.plist")), format: nil) as! NSDictionary
+        let ours = try PropertyListSerialization.propertyList(from: try #require(output.infoPlist), format: nil) as! NSDictionary
+        #expect(ours == goldenInfo)
+
+        // Build settings per configuration.
+        let objects = try PBXProjectFile.objects(
+            in: String(contentsOf: Self.root.appendingPathComponent("Fixtures/Golden/Xcode-27.0/AllTemplates/HelloApp.xcodeproj/project.pbxproj"), encoding: .utf8), path: "g")
+        let target = objects.values.first { $0["isa"] as? String == "PBXNativeTarget" && $0["name"] as? String == targetName }!
+        for configID in objects[target["buildConfigurationList"] as! String]!["buildConfigurations"] as! [String] {
+            let config = objects[configID]!
+            let name = config["name"] as! String
+            let expected = (config["buildSettings"] as! [String: Any]).filter { !Self.hostAligned.contains($0.key) }
+            let actual = (output.settings[name] ?? [:]).filter { !Self.hostAligned.contains($0.key) }.mapValues { setting -> Any in
+                switch setting { case .string(let s): s; case .list(let l): l }
+            }
+            let missing = Set(expected.keys).subtracting(actual.keys).sorted()
+            let extra = Set(actual.keys).subtracting(expected.keys).sorted()
+            let different = expected.keys.filter { key in actual[key].map { !NSDictionary(dictionary: [key: $0]).isEqual(to: [key: expected[key]!]) } ?? false }.sorted()
+            #expect(missing.isEmpty && extra.isEmpty && different.isEmpty,
+                    "\(targetName) \(name): missing \(missing) extra \(extra) different \(different.map { "\($0): ours \(actual[$0]!) xcode \(expected[$0]!)" })")
+        }
+        let frameworks = (target["buildPhases"] as! [String]).compactMap { objects[$0] }.first { $0["isa"] as? String == "PBXFrameworksBuildPhase" }!
+        let linked = (frameworks["files"] as! [String]).compactMap { objects[objects[$0]!["fileRef"] as! String]?["name"] as? String }
+        #expect(Set(output.frameworks.map { "\($0).framework" }) == Set(linked))
     }
 }

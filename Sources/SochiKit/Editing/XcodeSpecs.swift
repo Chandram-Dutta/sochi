@@ -16,6 +16,8 @@ public struct XcodeSpecs: Sendable {
     let productTypes: [String: [String: SpecValue]]
     let packageTypes: [String: [String: SpecValue]]
     let fileTypes: [String: [String: SpecValue]]
+    /// Build settings declared as lists (`StringList`/`PathList`), which Xcode writes as arrays in the project.
+    public let listSettings: Set<String>
 
     /// Loads specs from the Xcode that `xcode-select` points at (the same one that builds).
     public static func load() async throws -> XcodeSpecs {
@@ -29,6 +31,7 @@ public struct XcodeSpecs: Sendable {
         var products: [String: [String: SpecValue]] = [:]
         var packages: [String: [String: SpecValue]] = [:]
         var files: [String: [String: SpecValue]] = [:]
+        var lists = Set<String>()
         // Earlier roots win (Swift Build over the legacy XCBuild copies).
         for root in roots {
             guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { continue }
@@ -38,6 +41,15 @@ public struct XcodeSpecs: Sendable {
                 else { continue }
                 let entries = (plist as? [Any] ?? [plist]).compactMap(SpecValue.init)
                 for case .dictionary(let entry) in entries {
+                    for key in ["Options", "Properties"] {
+                        guard case .array(let settings)? = entry[key] else { continue }
+                        for case .dictionary(let setting) in settings {
+                            if case .string(let name)? = setting["Name"], case .string(let type)? = setting["Type"],
+                               type == "StringList" || type == "PathList" {
+                                lists.insert(name)
+                            }
+                        }
+                    }
                     guard case .string(let id)? = entry["Identifier"], case .string(let type)? = entry["Type"] else { continue }
                     switch type {
                     case "ProductType": if products[id] == nil { products[id] = entry }
@@ -49,7 +61,7 @@ public struct XcodeSpecs: Sendable {
             }
         }
         guard !products.isEmpty else { throw SochiError.xcodeDataUnavailable("build system product specifications") }
-        return XcodeSpecs(productTypes: products, packageTypes: packages, fileTypes: files)
+        return XcodeSpecs(productTypes: products, packageTypes: packages, fileTypes: files, listSettings: lists)
     }
 
     public var knownProductTypes: [String] { productTypes.keys.sorted() }
