@@ -8,7 +8,7 @@ struct Sochi: AsyncParsableCommand {
         commandName: "sochi",
         abstract: "Build and run Apple platform apps without opening Xcode.",
         version: "0.0.1",
-        subcommands: [Run.self, Build.self, Add.self, Remove.self, CapabilitiesCommand.self, EntitlementsCommand.self, Templates.self,
+        subcommands: [Run.self, Build.self, Add.self, Remove.self, CapabilitiesCommand.self, EntitlementsCommand.self, Templates.self, Migrate.self,
                       Devices_.self, Sims.self, Doctor.self]
     )
 }

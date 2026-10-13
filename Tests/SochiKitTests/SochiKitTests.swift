@@ -386,8 +386,11 @@ import Testing
                 == EmbedRule(phaseName: "Embed App Clips", dstSubfolderSpec: "16", dstPath: "$(CONTENTS_FOLDER_PATH)/AppClips"))
         #expect(specs.productFileType("com.apple.product-type.application.on-demand-install-capable") == "wrapper.application")
         #expect(!specs.isKnown("com.apple.product-type.teleporter"))
-        // Apps aren't embedded (App Clips are, via their own product type).
+        // Apps aren't embedded (App Clips are, via their own product type)…
         #expect(specs.embedRule("com.apple.product-type.application") == nil)
+        // …except watchOS apps inside their iOS companion, via the watchOS platform's spec.
+        #expect(specs.embedRule("com.apple.product-type.application", platform: "watchos")
+                == EmbedRule(phaseName: "Embed Watch Content", dstSubfolderSpec: "16", dstPath: "$(CONTENTS_FOLDER_PATH)/Watch"))
         #expect(specs.wrapperSuffix("com.apple.product-type.application") == ".app")
         #expect(specs.wrapperSuffix("com.apple.product-type.extensionkit-extension") == ".appex")
         // List-typed settings, which Xcode writes as arrays.
@@ -522,8 +525,10 @@ import Testing
         let context = TemplateContext(
             name: name, projectName: "HelloApp", hostBundleIdentifier: "dev.sochi.HelloApp", hostProductName: "HelloApp",
             hostProductType: "com.apple.product-type.application", developmentTeam: nil, fullUserName: "Someone")
-        let output = try TemplateEngine(index: index, specs: try await XcodeSpecs.load()).instantiate(
+        let outputs = try TemplateEngine(index: index, specs: try await XcodeSpecs.load()).instantiate(
             try index.find(template), context: context, projectSettings: file.projectBuildSettings, configurations: ["Debug", "Release"])
+        #expect(outputs.count == 1)
+        let output = try #require(outputs.first)
         #expect(output.targetName == targetName)
 
         // Files, byte for byte apart from the "Created by" line.
@@ -567,5 +572,158 @@ import Testing
         let frameworks = (target["buildPhases"] as! [String]).compactMap { objects[$0] }.first { $0["isa"] as? String == "PBXFrameworksBuildPhase" }!
         let linked = (frameworks["files"] as! [String]).compactMap { objects[objects[$0]!["fileRef"] as! String]?["name"] as? String }
         #expect(Set(output.frameworks.map { "\($0).framework" }) == Set(linked))
+    }
+}
+
+/// Group → synchronized folder migration: conversions must be faithful, and anything else must stay a group.
+@Suite struct MigrationTests {
+    static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+
+    /// Copies the classic fixture so tests can add files on disk or tweak the project.
+    func classicCopy(edit: (inout String) -> Void = { _ in }, extraFiles: [String: String] = [:]) throws -> PBXProjectFile {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sochi-migrate-test-\(UUID().uuidString)")
+        try FileManager.default.copyItem(at: Self.root.appendingPathComponent("Fixtures/Classic"), to: dir)
+        for (path, contents) in extraFiles {
+            let url = dir.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try contents.write(to: url, atomically: true, encoding: .utf8)
+        }
+        let pbxproj = dir.appendingPathComponent("Classic.xcodeproj/project.pbxproj")
+        var text = try String(contentsOf: pbxproj, encoding: .utf8)
+        edit(&text)
+        try text.write(to: pbxproj, atomically: true, encoding: .utf8)
+        return try PBXProjectFile(projectURL: dir.appendingPathComponent("Classic.xcodeproj"))
+    }
+
+    @Test func convertsTheClassicFixtureFaithfully() throws {
+        let (plan, report) = try Migration.plan(try classicCopy(), wrapperExtensions: ["xcassets"])
+        #expect(report.converted.map(\.folder).sorted() == ["ClassicApp", "ClassicKit", "Shared"])
+        let app = try #require(report.converted.first { $0.folder == "ClassicApp" })
+        #expect(app.exceptions["ClassicApp"] == ["ClassicApp-Bridging-Header.h", "Excluded.swift", "Info.plist", "README.md"])
+        #expect(app.flags["ClassicApp"] == ["util.c": "-DCLASSIC=1"])
+        #expect(report.converted.first { $0.folder == "Shared" }?.targets == ["ClassicApp", "ClassicKit"])
+        #expect(report.skipped.map(\.group) == ["Docs"])
+
+        let text = String(decoding: plan.edits[0].updated, as: UTF8.self)
+        let objects = try PBXProjectFile.objects(in: text, path: "x")
+        #expect(text.contains("objectVersion = 77;"))
+        #expect(!objects.values.contains { $0["isa"] as? String == "PBXBuildFile" })
+        #expect(objects.values.filter { $0["isa"] as? String == "PBXFileSystemSynchronizedRootGroup" }.count == 3)
+        // Docs (virtual) and Notes.md survive; the Products group is untouched.
+        #expect(objects.values.contains { $0["path"] as? String == "Notes.md" })
+        #expect(objects.values.contains { $0["path"] as? String == "ClassicApp.app" })
+    }
+
+    @Test func picksUpFilesAddedOnDiskAsExceptions() throws {
+        let (_, report) = try Migration.plan(
+            try classicCopy(extraFiles: ["ClassicApp/Resources/Stray.swift": "#error(\"no\")", "ClassicApp/.hidden": "x"]),
+            wrapperExtensions: ["xcassets"])
+        let app = try #require(report.converted.first { $0.folder == "ClassicApp" })
+        #expect(app.exceptions["ClassicApp"]?.contains("Resources/Stray.swift") == true)
+        #expect(app.exceptions["ClassicApp"]?.contains(".hidden") == false)
+    }
+
+    @Test(arguments: [
+        // A per-file attribute the folder format can't carry.
+        ("COMPILER_FLAGS = \"-DCLASSIC=1\";", "ATTRIBUTES = (Weak, );", "per-file ATTRIBUTES"),
+        // A referenced file that's gone from disk.
+        ("path = data.json;", "path = missing.json;", "missing on disk"),
+        // A folder reference ("blue folder").
+        ("lastKnownFileType = text.json; path = data.json;", "lastKnownFileType = folder; path = data.json;", "folder reference"),
+    ])
+    func leavesUnconvertibleGroupsAlone(find: String, replace: String, reason: String) throws {
+        let file = try classicCopy { $0 = $0.replacingOccurrences(of: find, with: replace) }
+        let (_, report) = try Migration.plan(file, wrapperExtensions: ["xcassets"])
+        #expect(!report.converted.contains { $0.folder == "ClassicApp" })
+        let skipped = try #require(report.skipped.first { $0.group == "ClassicApp" || $0.group == "Resources" })
+        #expect(skipped.reason.contains(reason) || reason == "per-file ATTRIBUTES" && skipped.reason.contains("ATTRIBUTES"), "\(skipped.reason)")
+        // Unaffected folders still convert.
+        #expect(report.converted.contains { $0.folder == "Shared" })
+    }
+
+    @Test func refusesFilesInCopyPhases() throws {
+        // Move data.json from Copy Bundle Resources into a Copy Files phase.
+        let file = try classicCopy { text in
+            text = text.replacingOccurrences(of: "isa = PBXResourcesBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n\t\t\t\tC0B0000000000000000000B6 /* Assets.xcassets in Resources */,\n\t\t\t\tC0B0000000000000000000B8 /* data.json in Resources */,",
+                with: "isa = PBXCopyFilesBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tdstPath = \"\";\n\t\t\tdstSubfolderSpec = 7;\n\t\t\tfiles = (\n\t\t\t\tC0B0000000000000000000B6 /* Assets.xcassets in Resources */,\n\t\t\t\tC0B0000000000000000000B8 /* data.json in Resources */,")
+        }
+        let (_, report) = try Migration.plan(file, wrapperExtensions: ["xcassets"])
+        #expect(!report.converted.contains { $0.folder == "ClassicApp" })
+        #expect(report.skipped.contains { $0.reason.contains("CopyFilesBuildPhase") })
+    }
+
+    @Test func isIdempotent() throws {
+        let file = try classicCopy()
+        let (plan, _) = try Migration.plan(file, wrapperExtensions: ["xcassets"])
+        try plan.edits[0].updated.write(to: file.pbxprojURL)
+        let (again, report) = try Migration.plan(try PBXProjectFile(projectURL: file.projectURL), wrapperExtensions: ["xcassets"])
+        #expect(again.edits.isEmpty && report.converted.isEmpty)
+    }
+}
+
+@Suite struct ComponentTemplateTests {
+    func instantiate(_ template: String, host: Bool = true) async throws -> [TemplateOutput] {
+        let index = try await TemplateIndex.load()
+        let file = try PBXProjectFile(projectURL: GoldenTemplateTests.root.appendingPathComponent("Fixtures/HelloApp/HelloApp.xcodeproj"))
+        var context = TemplateContext(
+            name: "Weather", projectName: "HelloApp", hostBundleIdentifier: "dev.sochi.HelloApp", hostProductName: "HelloApp",
+            hostProductType: "com.apple.product-type.application", developmentTeam: nil, fullUserName: "Someone")
+        if !host { context.hostBundleIdentifier = nil }
+        return try TemplateEngine(index: index, specs: try await XcodeSpecs.load()).instantiate(
+            try index.find(template), context: context, projectSettings: file.projectBuildSettings, configurations: ["Debug", "Release"])
+    }
+
+    @Test func watchAppForExistingIOSApp() async throws {
+        let outputs = try await instantiate("watchos-app")
+        // The companion chooser picks the choice that embeds into the existing app: one watchOS target, no new iOS app.
+        #expect(outputs.map(\.targetName) == ["Weather Watch App"])
+        let watch = try #require(outputs.first)
+        #expect(watch.isComponent && watch.injectInto == nil && watch.productName == "Weather Watch App")
+        #expect(watch.settings["Debug"]?["SDKROOT"] == .string("watchos"))
+        if case .string(let id)? = watch.settings["Debug"]?["PRODUCT_BUNDLE_IDENTIFIER"] { #expect(id.hasPrefix("dev.sochi.HelloApp.")) }
+    }
+
+    @Test func iMessageAppEmbedsItsExtensionInItsOwnApp() async throws {
+        let outputs = try await instantiate("imessage-app")
+        #expect(outputs.count == 2)
+        let (app, ext) = (outputs[0], outputs[1])
+        #expect(ext.injectInto != nil && ext.injectInto == app.targetIdentifier)
+        guard case .string(let appID)? = app.settings["Debug"]?["PRODUCT_BUNDLE_IDENTIFIER"],
+              case .string(let extID)? = ext.settings["Debug"]?["PRODUCT_BUNDLE_IDENTIFIER"] else { Issue.record("no bundle IDs"); return }
+        // A new app beside the host takes the host's organization prefix; its extension nests under it exactly once.
+        #expect(appID == "dev.sochi.Weather")
+        #expect(extID == "dev.sochi.Weather.MessagesExtension")
+    }
+}
+
+@Suite struct InfoPlistAndVerifierTests {
+    @Test func reusesTheTargetsExceptionSet() throws {
+        let fixture = GoldenTemplateTests.root.appendingPathComponent("Fixtures/HelloApp/HelloApp.xcodeproj")
+        let file = try PBXProjectFile(projectURL: fixture)
+        let target = file.targets[0]
+        var writer = PBXTextWriter(file.text)
+        try writer.addMembershipException("Info.plist", group: "AA0000000000000000000002", target: target, objects: file.objects)
+        let once = try PBXProjectFile(projectURL: fixture, text: writer.text)
+        var again = PBXTextWriter(once.text)
+        try again.addMembershipException("Notes.md", group: "AA0000000000000000000002", target: target, objects: once.objects)
+        try again.addMembershipException("Info.plist", group: "AA0000000000000000000002", target: target, objects: once.objects)
+        let objects = try PBXProjectFile.objects(in: again.text, path: "x")
+        let sets = objects.values.filter { $0["isa"] as? String == "PBXFileSystemSynchronizedBuildFileExceptionSet" }
+        #expect(sets.count == 1)
+        #expect(sets.first?["membershipExceptions"] as? [String] == ["Info.plist", "Notes.md"])
+    }
+
+    @Test func collectsCompiledSourcesPerTarget() {
+        let collector = InventoryCollector(root: "/p")
+        collector.consume(#"SwiftCompile normal arm64 Compiling\ A.swift,\ My\ File.swift /p/App/A.swift /p/App/My\ File.swift /tmp/obj/Gen.swift (in target 'App' from project 'P')"#)
+        collector.consume(#"CompileC /tmp/obj/util.o /p/App/util.c normal arm64 c com.apple.compilers.llvm.clang.1_0.compiler (in target 'App' from project 'P')"#)
+        collector.consume(#"CompileC /tmp/obj/vers.o /tmp/obj/DerivedSources/vers.c normal arm64 c x (in target 'Kit' from project 'P')"#)
+        #expect(collector.sources == ["App": ["App/A.swift", "App/My File.swift", "App/util.c"]])
+        var before = BuildInventory(sources: collector.sources, products: ["App.app": ["App", "data.json"]])
+        var after = before
+        after.products["App.app"] = ["App", "data.json", "README.md"]
+        #expect(after.differences(from: before) == ["App.app: now contains README.md"])
+        before.sources["App"]?.remove("App/util.c")
+        #expect(after.differences(from: before).contains("App: now compiles App/util.c"))
     }
 }

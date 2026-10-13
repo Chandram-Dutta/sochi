@@ -60,7 +60,7 @@ struct PBXTextWriter {
     }
 
     /// The ID of a top-level object definition line (exactly two tabs of indentation), if it is one.
-    private static func objectID(_ line: String) -> String? {
+    static func objectID(_ line: String) -> String? {
         guard line.hasPrefix("\t\t"), !line.hasPrefix("\t\t\t"), line.contains(" = {") else { return nil }
         return line.dropFirst(2).split(separator: " ", maxSplits: 1).first.map(String.init)
     }

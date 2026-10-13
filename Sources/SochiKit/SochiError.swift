@@ -43,6 +43,9 @@ public enum SochiError: Error, CustomStringConvertible {
     case templateNeedsHost(String)
     case unknownTemplateOption(String, available: [String])
     case unsupportedTemplateMacro(String)
+    case migrationChangesBuild([String])
+    case mixedInfoPlist(target: String, missing: [String])
+    case migrationBaselineFailed([String])
     case unknownProductType(String, suggestions: [String])
     case noEmbedRule(String)
 
@@ -130,6 +133,15 @@ public enum SochiError: Error, CustomStringConvertible {
             return "The \(name) template embeds in an app; pass the app with --host"
         case .unknownTemplateOption(let option, let available):
             return "Unknown option '\(option)'." + (available.isEmpty ? " This template has no options." : " Options: \(available.joined(separator: ", "))")
+        case .mixedInfoPlist(let target, let missing):
+            return "\(target) has an Info.plist file in some configurations but not \(missing.joined(separator: ", ")). Set INFOPLIST_FILE for those first so sochi doesn't guess."
+        case .migrationChangesBuild(let differences):
+            let shown = differences.prefix(15).map { "\n  • \($0)" }.joined()
+            return "The converted project wouldn't build the same, so nothing was changed:\(shown)"
+                + (differences.count > 15 ? "\n  … and \(differences.count - 15) more" : "")
+        case .migrationBaselineFailed(let errors):
+            let shown = errors.prefix(5).map { "\n  • \($0)" }.joined()
+            return "The project doesn't build as it is, so the migration can't be verified. Fix the build, or pass --no-verify to rely on the static checks only.\(shown)"
         case .unsupportedTemplateMacro(let name):
             return "The template uses a macro sochi doesn't know (___\(name)___); no files were written."
         case .ambiguousCapability(let query, let candidates):

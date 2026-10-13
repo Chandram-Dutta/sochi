@@ -1,0 +1,384 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		C0B0000000000000000000B1 /* ClassicApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F0000000000000000000F1 /* ClassicApp.swift */; };
+		C0B0000000000000000000B2 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F0000000000000000000F2 /* ContentView.swift */; };
+		C0B0000000000000000000B4 /* util.c in Sources */ = {isa = PBXBuildFile; fileRef = C0F0000000000000000000F4 /* util.c */; settings = {COMPILER_FLAGS = "-DCLASSIC=1"; }; };
+		C0B0000000000000000000B6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C0F0000000000000000000F6 /* Assets.xcassets */; };
+		C0B0000000000000000000B8 /* data.json in Resources */ = {isa = PBXBuildFile; fileRef = C0F0000000000000000000F8 /* data.json */; };
+		C0B0000000000000000000B9 /* Formatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F0000000000000000000F9 /* Formatter.swift */; };
+		C0B000000000000000000B10 /* ClassicKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F000000000000000000F10 /* ClassicKit.swift */; };
+		C0B000000000000000000B19 /* Formatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F0000000000000000000F9 /* Formatter.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		C0F0000000000000000000F1 /* ClassicApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClassicApp.swift; sourceTree = "<group>"; };
+		C0F0000000000000000000F2 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		C0F0000000000000000000F3 /* Excluded.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Excluded.swift; sourceTree = "<group>"; };
+		C0F0000000000000000000F4 /* util.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = util.c; sourceTree = "<group>"; };
+		C0F0000000000000000000F5 /* ClassicApp-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "ClassicApp-Bridging-Header.h"; sourceTree = "<group>"; };
+		C0F0000000000000000000F6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C0F0000000000000000000F7 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		C0F0000000000000000000F8 /* data.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = data.json; sourceTree = "<group>"; };
+		C0F0000000000000000000F9 /* Formatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatter.swift; sourceTree = "<group>"; };
+		C0F000000000000000000F10 /* ClassicKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClassicKit.swift; sourceTree = "<group>"; };
+		C0F000000000000000000F11 /* Notes.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = Notes.md; sourceTree = "<group>"; };
+		C0F000000000000000000P01 /* ClassicApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClassicApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0F000000000000000000P02 /* ClassicKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = ClassicKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		C0A000000000000000000FW1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0A000000000000000000FW2 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		C0G000000000000000000G00 = {
+			isa = PBXGroup;
+			children = (
+				C0G000000000000000000G01 /* ClassicApp */,
+				C0G000000000000000000G03 /* Shared */,
+				C0G000000000000000000G04 /* ClassicKit */,
+				C0G000000000000000000G05 /* Docs */,
+				C0G000000000000000000G06 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		C0G000000000000000000G01 /* ClassicApp */ = {
+			isa = PBXGroup;
+			children = (
+				C0F0000000000000000000F1 /* ClassicApp.swift */,
+				C0F0000000000000000000F2 /* ContentView.swift */,
+				C0F0000000000000000000F3 /* Excluded.swift */,
+				C0F0000000000000000000F4 /* util.c */,
+				C0F0000000000000000000F5 /* ClassicApp-Bridging-Header.h */,
+				C0F0000000000000000000F6 /* Assets.xcassets */,
+				C0F0000000000000000000F7 /* Info.plist */,
+				C0G000000000000000000G02 /* Resources */,
+			);
+			path = ClassicApp;
+			sourceTree = "<group>";
+		};
+		C0G000000000000000000G02 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				C0F0000000000000000000F8 /* data.json */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		C0G000000000000000000G03 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				C0F0000000000000000000F9 /* Formatter.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		C0G000000000000000000G04 /* ClassicKit */ = {
+			isa = PBXGroup;
+			children = (
+				C0F000000000000000000F10 /* ClassicKit.swift */,
+			);
+			path = ClassicKit;
+			sourceTree = "<group>";
+		};
+		C0G000000000000000000G05 /* Docs */ = {
+			isa = PBXGroup;
+			children = (
+				C0F000000000000000000F11 /* Notes.md */,
+			);
+			name = Docs;
+			sourceTree = "<group>";
+		};
+		C0G000000000000000000G06 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C0F000000000000000000P01 /* ClassicApp.app */,
+				C0F000000000000000000P02 /* ClassicKit.framework */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		C0T000000000000000000T01 /* ClassicApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C0L000000000000000000L02 /* Build configuration list for PBXNativeTarget "ClassicApp" */;
+			buildPhases = (
+				C0A000000000000000000S01 /* Sources */,
+				C0A000000000000000000FW1 /* Frameworks */,
+				C0A000000000000000000R01 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ClassicApp;
+			productName = ClassicApp;
+			productReference = C0F000000000000000000P01 /* ClassicApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+		C0T000000000000000000T02 /* ClassicKit */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C0L000000000000000000L03 /* Build configuration list for PBXNativeTarget "ClassicKit" */;
+			buildPhases = (
+				C0A000000000000000000S02 /* Sources */,
+				C0A000000000000000000FW2 /* Frameworks */,
+				C0A000000000000000000R02 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ClassicKit;
+			productName = ClassicKit;
+			productReference = C0F000000000000000000P02 /* ClassicKit.framework */;
+			productType = "com.apple.product-type.framework";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		C0P000000000000000000PRJ /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+			};
+			buildConfigurationList = C0L000000000000000000L01 /* Build configuration list for PBXProject "Classic" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = C0G000000000000000000G00;
+			productRefGroup = C0G000000000000000000G06 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				C0T000000000000000000T01 /* ClassicApp */,
+				C0T000000000000000000T02 /* ClassicKit */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		C0A000000000000000000R01 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C0B0000000000000000000B6 /* Assets.xcassets in Resources */,
+				C0B0000000000000000000B8 /* data.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0A000000000000000000R02 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		C0A000000000000000000S01 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C0B0000000000000000000B1 /* ClassicApp.swift in Sources */,
+				C0B0000000000000000000B2 /* ContentView.swift in Sources */,
+				C0B0000000000000000000B4 /* util.c in Sources */,
+				C0B0000000000000000000B9 /* Formatter.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0A000000000000000000S02 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C0B000000000000000000B10 /* ClassicKit.swift in Sources */,
+				C0B000000000000000000B19 /* Formatter.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		C0C0000000000000000000C1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		C0C0000000000000000000C2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		C0C0000000000000000000C3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ClassicApp/Info.plist;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.sochi.Classic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = "ClassicApp/ClassicApp-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		C0C0000000000000000000C4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ClassicApp/Info.plist;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.sochi.Classic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = "ClassicApp/ClassicApp-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		C0C0000000000000000000C5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.sochi.ClassicKit;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Debug;
+		};
+		C0C0000000000000000000C6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.sochi.ClassicKit;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		C0L000000000000000000L01 /* Build configuration list for PBXProject "Classic" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C0C0000000000000000000C1 /* Debug */,
+				C0C0000000000000000000C2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C0L000000000000000000L02 /* Build configuration list for PBXNativeTarget "ClassicApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C0C0000000000000000000C3 /* Debug */,
+				C0C0000000000000000000C4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C0L000000000000000000L03 /* Build configuration list for PBXNativeTarget "ClassicKit" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C0C0000000000000000000C5 /* Debug */,
+				C0C0000000000000000000C6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = C0P000000000000000000PRJ /* Project object */;
+}

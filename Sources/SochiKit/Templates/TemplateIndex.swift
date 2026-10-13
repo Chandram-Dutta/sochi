@@ -16,6 +16,11 @@ public struct XcodeTemplate: @unchecked Sendable {
     public var slug: String {
         name.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).joined(separator: "-")
     }
+
+    /// The slug as seen from a platform: templates of another platform are prefixed, e.g. `watchos-app`.
+    public func slug(from platformFolder: String) -> String {
+        [platformFolder, "MultiPlatform"].contains(self.platformFolder) ? slug : "\(self.platformFolder.lowercased())-\(slug)"
+    }
 }
 
 /// Xcode's project/target templates, discovered at runtime. sochi ships none of its own.
@@ -30,6 +35,7 @@ public struct TemplateIndex: @unchecked Sendable {
         let roots = [
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Developer/Xcode/Templates/Project Templates"),
             developer.appendingPathComponent("Platforms/iPhoneOS.platform/Developer/Library/Xcode/Templates/Project Templates"),
+            developer.appendingPathComponent("Platforms/WatchOS.platform/Developer/Library/Xcode/Templates/Project Templates"),
             developer.appendingPathComponent("Library/Xcode/Templates/Project Templates"),
         ]
         let index = load(roots: roots)
@@ -59,13 +65,25 @@ public struct TemplateIndex: @unchecked Sendable {
         return TemplateIndex(templates: templates)
     }
 
-    /// Concrete templates that create a target for a platform, sorted by category and name.
+    /// Concrete templates that create a target for a platform, sorted by category and name. Includes templates of
+    /// other platforms that the platform's apps can host (e.g. a watchOS app inside an iOS app).
     public func targetTemplates(platformFolder: String = "iOS") -> [XcodeTemplate] {
-        templates.values
-            .filter { [platformFolder, "MultiPlatform"].contains($0.platformFolder) }
+        let platformID = ["iOS": "com.apple.platform.iphoneos", "watchOS": "com.apple.platform.watchos"][platformFolder]
+        return templates.values
             .filter { $0.info["Concrete"] as? Bool == true && $0.info["Kind"] as? String == "Xcode.Xcode3.ProjectTemplateUnitKind" }
-            .filter { resolve($0).targets.first?["ProductType"] is String }
+            .filter { t in
+                if [platformFolder, "MultiPlatform"].contains(t.platformFolder) { return true }
+                let allowed = resolve(t).association?["AllowablePlatforms"] as? [String] ?? []
+                return platformID.map(allowed.contains) ?? false
+            }
+            .filter { createsTarget(resolve($0)) }
             .sorted { ($0.category, $0.name, $0.platformFolder) < ($1.category, $1.name, $1.platformFolder) }
+    }
+
+    /// Whether a template creates a target itself or through components (possibly selected by an option).
+    func createsTarget(_ resolved: ResolvedTemplate) -> Bool {
+        resolved.targets.first?["ProductType"] is String || !resolved.components.isEmpty
+            || resolved.units.values.contains { $0.values.contains { $0.contains { $0.unit["Components"] != nil } } }
     }
 
     /// Finds a template by slug, display name, or identifier, then by unambiguous partial name.
@@ -73,15 +91,20 @@ public struct TemplateIndex: @unchecked Sendable {
     public func find(_ query: String, platformFolder: String = "iOS") throws -> XcodeTemplate {
         let pool = targetTemplates(platformFolder: platformFolder)
         let q = query.lowercased()
-        let exact = pool.filter { $0.slug == q || $0.name.lowercased() == q || $0.identifier.lowercased() == q }
+        let exact = pool.filter { $0.slug(from: platformFolder) == q || $0.identifier.lowercased() == q
+            || ($0.name.lowercased() == q && [platformFolder, "MultiPlatform"].contains($0.platformFolder)) }
         if let best = exact.first(where: { $0.platformFolder == platformFolder }) ?? exact.first { return best }
         let words = q.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
-        var partial = pool.filter { t in words.allSatisfy { t.slug.contains($0) } }
+        var partial = pool.filter { t in words.allSatisfy { t.slug(from: platformFolder).contains($0) } }
         // Drop MultiPlatform duplicates of platform templates with the same name.
         partial = partial.filter { t in t.platformFolder == platformFolder || !partial.contains { $0.name == t.name && $0.platformFolder == platformFolder } }
+        // Same-named templates of other platforms (e.g. watchOS Widget Extension) lose to the requested platform's.
+        if partial.contains(where: { $0.platformFolder == platformFolder }) {
+            partial = partial.filter { t in t.platformFolder == platformFolder || !partial.contains { $0.platformFolder == platformFolder && $0.name == t.name } }
+        }
         if partial.count == 1 { return partial[0] }
         if partial.isEmpty { throw SochiError.unknownTemplate(query) }
-        throw SochiError.ambiguousTemplate(query, candidates: partial.map(\.slug))
+        throw SochiError.ambiguousTemplate(query, candidates: partial.map { $0.slug(from: platformFolder) })
     }
 
     /// The template and its ancestors, nearest first (depth-first, as listed in `Ancestors`).

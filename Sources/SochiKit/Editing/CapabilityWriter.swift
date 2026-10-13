@@ -43,9 +43,10 @@ public struct LocalCapability: Sendable {
             slug: "keychain-sharing", name: "Keychain Sharing", key: "keychain-access-groups", unsupportedReason: nil,
             defaultValue: { "$(AppIdentifierPrefix)\($0)" },
             normalize: { $0.hasPrefix("$(") ? $0 : "$(AppIdentifierPrefix)\($0)" }),
+        // Edited through the target's Info.plist (see ProjectEditor.planBackgroundModes), not entitlements.
         LocalCapability(
             slug: "background-modes", name: "Background Modes", key: nil,
-            unsupportedReason: "Background Modes are Info.plist keys (UIBackgroundModes), not entitlements; sochi can't edit those yet",
+            unsupportedReason: "Background Modes are Info.plist keys; use `sochi add capability background-modes <mode>…`",
             defaultValue: nil, normalize: { $0 }),
     ]
 }

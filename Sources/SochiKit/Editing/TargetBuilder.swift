@@ -27,6 +27,8 @@ public struct TargetSpec: Sendable {
     public var frameworks: [String] = []
     /// Embed the product in the host app using Xcode's embed rule for its product type.
     public var embed = true
+    /// The product's SDK (e.g. `watchos`), for platform-specific embed rules; nil means the host's platform.
+    public var sdk: String?
 
     public init(name: String, folder: String, productType: String) {
         self.name = name
@@ -53,7 +55,7 @@ enum TargetBuilder {
         guard let fileType = specs.productFileType(spec.productType) else {
             throw SochiError.xcodeDataUnavailable("the product file type for \(spec.productType)")
         }
-        let rule = spec.embed && host != nil ? specs.embedRule(spec.productType) : nil
+        let rule = spec.embed && host != nil ? specs.embedRule(spec.productType, platform: spec.sdk) : nil
         if spec.embed, host != nil, rule == nil { throw SochiError.noEmbedRule(spec.productType) }
 
         var used = Set<String>()

@@ -18,6 +18,9 @@ public struct XcodeSpecs: Sendable {
     let fileTypes: [String: [String: SpecValue]]
     /// Build settings declared as lists (`StringList`/`PathList`), which Xcode writes as arrays in the project.
     public let listSettings: Set<String>
+    /// Platform-specific redefinitions of product types, by spec domain (e.g. `watchos-shared`): a watchOS app is
+    /// embedded in its iOS companion through the watchOS domain's application spec.
+    let domainProductTypes: [String: [String: [String: SpecValue]]]
 
     /// Loads specs from the Xcode that `xcode-select` points at (the same one that builds).
     public static func load() async throws -> XcodeSpecs {
@@ -32,6 +35,7 @@ public struct XcodeSpecs: Sendable {
         var packages: [String: [String: SpecValue]] = [:]
         var files: [String: [String: SpecValue]] = [:]
         var lists = Set<String>()
+        var domains: [String: [String: [String: SpecValue]]] = [:]
         // Earlier roots win (Swift Build over the legacy XCBuild copies).
         for root in roots {
             guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { continue }
@@ -51,6 +55,12 @@ public struct XcodeSpecs: Sendable {
                         }
                     }
                     guard case .string(let id)? = entry["Identifier"], case .string(let type)? = entry["Type"] else { continue }
+                    // Only platform domains are platform-specific; other domains (e.g. darwin) are the general definitions.
+                    if type == "ProductType", case .string(let domain)? = entry["_Domain"] ?? entry["Domain"],
+                       ["iphoneos", "watchos", "appletvos", "xros", "macosx"].contains(where: domain.hasPrefix) {
+                        if domains[domain]?[id] == nil { domains[domain, default: [:]][id] = entry }
+                        continue
+                    }
                     switch type {
                     case "ProductType": if products[id] == nil { products[id] = entry }
                     case "PackageType": if packages[id] == nil { packages[id] = entry }
@@ -61,10 +71,23 @@ public struct XcodeSpecs: Sendable {
             }
         }
         guard !products.isEmpty else { throw SochiError.xcodeDataUnavailable("build system product specifications") }
-        return XcodeSpecs(productTypes: products, packageTypes: packages, fileTypes: files, listSettings: lists)
+        return XcodeSpecs(productTypes: products, packageTypes: packages, fileTypes: files, listSettings: lists,
+                          domainProductTypes: domains)
     }
 
     public var knownProductTypes: [String] { productTypes.keys.sorted() }
+
+    /// Extensions of folder-shaped files (asset catalogs, Core Data models, bundles…): file types Xcode's specs mark
+    /// as wrapper folders. A synchronized folder treats these as single files.
+    public var wrapperExtensions: Set<String> {
+        var result = Set<String>()
+        for entry in fileTypes.values {
+            guard case .string(let wrapper)? = entry["IsWrapperFolder"], wrapper == "YES" || wrapper == "1",
+                  case .array(let extensions)? = entry["Extensions"] else { continue }
+            for case .string(let ext) in extensions { result.insert(ext.lowercased()) }
+        }
+        return result
+    }
 
     public func isKnown(_ productType: String) -> Bool { productTypes[productType] != nil }
 
@@ -95,8 +118,14 @@ public struct XcodeSpecs: Sendable {
         return nil
     }
 
-    /// How a product of this type is embedded in its host, if Xcode embeds it at all.
-    public func embedRule(_ productType: String) -> EmbedRule? {
+    /// How a product of this type is embedded in its host, if Xcode embeds it at all. `platform` is the product's SDK
+    /// (e.g. `watchos`): platform-specific specs take precedence, as in Xcode's build system.
+    public func embedRule(_ productType: String, platform: String? = nil) -> EmbedRule? {
+        if let platform {
+            for (domain, types) in domainProductTypes.sorted(by: { $0.key < $1.key }) where domain.hasPrefix(platform) {
+                if let rule = Self.rule(from: types[productType]?["BuildPhaseInjectionsWhenEmbedding"]) { return rule }
+            }
+        }
         for id in chain(productType) {
             if let rule = Self.rule(from: productTypes[id]?["BuildPhaseInjectionsWhenEmbedding"]) { return rule }
         }

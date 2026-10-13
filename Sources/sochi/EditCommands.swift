@@ -155,7 +155,8 @@ struct Templates: AsyncParsableCommand {
                     Terminal.print(Terminal.bold(category))
                 }
                 let platform = template.platformFolder == "iOS" ? "" : Terminal.dim("  (\(template.platformFolder))")
-                let slug = template.slug.count < 42 ? template.slug.padding(toLength: 42, withPad: " ", startingAt: 0) : template.slug + "  "
+                let name = template.slug(from: "iOS")
+                let slug = name.count < 42 ? name.padding(toLength: 42, withPad: " ", startingAt: 0) : name + "  "
                 Terminal.print("  \(slug)\(template.name)\(platform)")
                 if !options.isEmpty { Terminal.print(Terminal.dim("    --option \(options.joined(separator: "  --option "))")) }
             }
@@ -510,4 +511,73 @@ private func relativePath(_ url: URL) -> String {
 private final class LineBuffer: @unchecked Sendable {
     var value: [String] = []
     func append(_ line: String) { value.append(line) }
+}
+
+// MARK: - sochi migrate
+
+struct Migrate: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Convert a group-based project to synchronized folders (Xcode 16's format).",
+        discussion: """
+            Each group that mirrors a real folder becomes a synchronized folder. Files on disk a target didn't use
+            become exceptions, and per-file compiler flags carry over, so every target builds exactly what it did
+            before. Groups that can't be converted faithfully are left as they are, with the reason.
+
+            Before writing anything, sochi builds the project as it is and as converted (device SDK, no signing)
+            and refuses if the compiled sources or bundled files differ. The converted project needs Xcode 16+.
+            """)
+
+    @Option(name: .customLong("project"), help: "Project directory or .xcodeproj.")
+    var path: String = "."
+
+    @Flag(help: "Show what would change without writing.")
+    var dryRun = false
+
+    @Flag(help: "Skip the before/after build comparison (static checks still run).")
+    var noVerify = false
+
+    @Flag(help: "Convert even if the project looks generated (XcodeGen, Tuist).")
+    var force = false
+
+    func run() async throws {
+        try await reportingErrors {
+            Terminal.status("  \(Terminal.dim("analyzing groups…"))")
+            let (plan, report) = try await Migration.plan(path: path, force: force)
+            Terminal.clearStatus()
+            for folder in report.converted {
+                let targets = folder.targets.isEmpty ? Terminal.dim("no targets") : folder.targets.joined(separator: ", ")
+                Terminal.print("\(Terminal.green("→")) \(Terminal.bold(folder.folder))/  \(Terminal.dim("·")) \(targets)")
+                for target in folder.targets {
+                    let exceptions = folder.exceptions[target] ?? []
+                    let flags = folder.flags[target] ?? [:]
+                    if !exceptions.isEmpty {
+                        Terminal.print(Terminal.dim("    \(target) excludes: \(exceptions.joined(separator: ", "))"))
+                    }
+                    for (file, value) in flags.sorted(by: { $0.key < $1.key }) {
+                        Terminal.print(Terminal.dim("    \(target) keeps flags for \(file): \(value)"))
+                    }
+                }
+            }
+            for skipped in report.skipped {
+                Terminal.print("\(Terminal.yellow("·")) \(skipped.group) \(Terminal.dim("stays a group: \(skipped.reason)"))")
+            }
+            guard !plan.edits.isEmpty else {
+                Terminal.success("nothing to convert")
+                return
+            }
+            if dryRun {
+                Terminal.print(Terminal.dim("dry run: no files written"))
+                return
+            }
+            if !noVerify {
+                let inventory = try await MigrationVerifier.verify(plan) { step in Terminal.status("  \(Terminal.dim(step + "…"))") }
+                Terminal.clearStatus()
+                Terminal.success("builds identically \(Terminal.dim("(\(inventory.sourceCount) compiled sources, \(inventory.productFileCount) bundled files across \(inventory.products.count) products)"))")
+            }
+            Terminal.status("  \(Terminal.dim("writing and verifying…"))")
+            try await ProjectEditor.apply(plan)
+            Terminal.clearStatus()
+            Terminal.success("converted \(report.converted.count) folder\(report.converted.count == 1 ? "" : "s") \(Terminal.dim("· the project now needs Xcode 16 or later"))")
+        }
+    }
 }

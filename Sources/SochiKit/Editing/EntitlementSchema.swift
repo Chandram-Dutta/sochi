@@ -24,19 +24,24 @@ public struct EntitlementSchema: Sendable {
 
     // MARK: Xcode's local schema
 
-    public static func load() async -> EntitlementSchema {
+    /// Xcode's schema for Info.plist keys (e.g. allowed UIBackgroundModes), parsed the same way.
+    public static func loadInfoPlist() async -> EntitlementSchema {
+        await load(section: "com.apple.xcode.plist.structure-definition.info-plist")
+    }
+
+    public static func load(section: String = "com.apple.xcode.plist.structure-definition.entitlements") async -> EntitlementSchema {
         guard let developer = try? await Shell.run(["xcode-select", "-p"]).trimmingCharacters(in: .whitespacesAndNewlines) else {
             return EntitlementSchema(keys: [:])
         }
         let file = URL(fileURLWithPath: developer).deletingLastPathComponent()
             .appendingPathComponent("PlugIns/DVTCorePlistStructDefs.dvtplugin/Contents/Resources/DVTCorePlistStructDefs.xcplugindata")
-        return (try? load(from: file)) ?? EntitlementSchema(keys: [:])
+        return (try? load(from: file, section: section)) ?? EntitlementSchema(keys: [:])
     }
 
-    static func load(from file: URL) throws -> EntitlementSchema {
+    static func load(from file: URL, section: String) throws -> EntitlementSchema {
         let data = try Data(contentsOf: file)
         guard let root = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              let xml = findXML(in: root, id: "com.apple.xcode.plist.structure-definition.entitlements")
+              let xml = findXML(in: root, id: section)
         else { return EntitlementSchema(keys: [:]) }
         return parse(xml: xml)
     }

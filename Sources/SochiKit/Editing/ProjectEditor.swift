@@ -17,6 +17,8 @@ public struct EditPlan: Sendable {
     var expectedEntitlements: [String: String] = [:]
     /// Targets `xcodebuild -list` must report after applying.
     var expectedTargets: [String] = []
+    /// Configuration name → settings xcodebuild must resolve to after applying.
+    var expectedSettings: [String: [String: String]] = [:]
 }
 
 /// Edits capabilities the way Xcode's "+ Capability" does, but only touching local files:
@@ -43,6 +45,9 @@ public enum ProjectEditor {
         async let loadedSchema = EntitlementSchema.load()
         let catalog = try await CapabilityCatalog.load(team: nil)
         let capability = try CapabilityWriter.resolve(query, catalog: catalog)
+        if case .local(let local) = capability, local.slug == "background-modes" {
+            return try await planBackgroundModes(values: values, remove: remove, path: path, target: target, force: force)
+        }
         let schema = await loadedSchema
         let keys = CapabilityWriter.keys(of: capability, schema: schema)
         return try await planEntitlements(
@@ -52,6 +57,30 @@ public enum ProjectEditor {
             if remove { return CapabilityWriter.removing(keys: keys, values: values, from: current) }
             let entries = try await CapabilityWriter.entries(for: capability, values: values, bundleID: bundleID, schema: schema)
             return CapabilityWriter.adding(entries, to: current)
+        }
+    }
+
+    /// Background Modes are the Info.plist array `UIBackgroundModes`; allowed values come from Xcode's Info.plist schema.
+    static func planBackgroundModes(values: [String], remove: Bool, path: String, target: String?, force: Bool) async throws -> EditPlan {
+        let allowed = await EntitlementSchema.loadInfoPlist()["UIBackgroundModes"]?.allowedValues ?? []
+        if !remove {
+            guard !values.isEmpty else {
+                throw SochiError.capabilityNeedsChoice(capability: "background-modes", key: "UIBackgroundModes", options: allowed)
+            }
+            if !allowed.isEmpty, let bad = values.first(where: { !allowed.contains($0) }) {
+                throw SochiError.invalidCapabilityValue("background-modes", "doesn't accept '\(bad)'. Options: \(allowed.joined(separator: ", "))")
+            }
+        }
+        return try await planInfoPlist(path: path, target: target, force: force, label: "Background Modes", removing: remove) { current in
+            var updated = current
+            let existing = current["UIBackgroundModes"] as? [String] ?? []
+            if remove {
+                let remaining = values.isEmpty ? [] : existing.filter { !values.contains($0) }
+                updated["UIBackgroundModes"] = remaining.isEmpty ? nil : remaining
+            } else {
+                updated["UIBackgroundModes"] = existing + values.filter { !existing.contains($0) }
+            }
+            return updated
         }
     }
 
@@ -154,6 +183,12 @@ public enum ProjectEditor {
             let output = try await Shell.run(["xcodebuild", "-list", "-json", "-project", plan.projectURL.path])
             for target in plan.expectedTargets where !output.contains("\"\(target)\"") {
                 throw SochiError.editVerificationFailed("xcodebuild doesn't list target \(target)")
+            }
+        }
+        for (config, settings) in plan.expectedSettings {
+            let resolved = try await Xcodebuild.targetSettings(project: plan.projectURL, target: plan.target, configuration: config)
+            for (key, value) in settings where resolved[key] != value {
+                throw SochiError.editVerificationFailed("\(config) resolves \(key) to '\(resolved[key] ?? "")', expected '\(value)'")
             }
         }
         for (config, expected) in plan.expectedEntitlements {
