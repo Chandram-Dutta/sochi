@@ -18,14 +18,15 @@ struct EditOptions: ParsableArguments {
 
 struct Add: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Add a capability or a target, like Xcode's + Capability and New Target.",
+        abstract: "Add a capability, a target, or a Swift package.",
         discussion: """
             Examples:
               sochi add capability push-notifications
               sochi add capability associated-domains applinks:example.com
               sochi add target widget-extension Weather
+              sochi add package pointfreeco/swift-dependencies
             """,
-        subcommands: [AddCapability.self, AddTarget.self])
+        subcommands: [AddCapability.self, AddTarget.self, AddPackage.self])
 }
 
 struct AddCapability: AsyncParsableCommand {
@@ -169,9 +170,9 @@ struct Templates: AsyncParsableCommand {
 
 struct Remove: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Remove a capability.",
+        abstract: "Remove a capability or a Swift package.",
         discussion: "Example:\n  sochi remove capability app-groups group.com.example.old",
-        subcommands: [RemoveCapability.self])
+        subcommands: [RemoveCapability.self, RemovePackage.self])
 }
 
 struct RemoveCapability: AsyncParsableCommand {
@@ -682,4 +683,186 @@ struct New: AsyncParsableCommand {
             Terminal.print(Terminal.dim("  next: cd \(name) && sochi run"))
         }
     }
+}
+
+// MARK: - Swift packages
+
+struct AddPackage: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "package",
+        abstract: "Add a Swift package (remote or local) to a target; recorded in sochi.toml and the project.",
+        discussion: """
+            Without a version rule, sochi uses "up to next major" from the newest release tag, like Xcode. Products are
+            read from the package itself; with one library product it's picked for you.
+
+            Examples:
+              sochi add package https://github.com/pointfreeco/swift-dependencies
+              sochi add package pointfreeco/swift-dependencies --from 1.4.0 --product Dependencies
+              sochi add package apple/swift-collections --exact 1.1.0 --product OrderedCollections
+              sochi add package ../MyKit
+            """)
+
+    @Argument(help: "Repository URL, owner/repo (GitHub), or a local folder with a Package.swift.")
+    var source: String
+
+    @Option(help: ArgumentHelp("Up to the next major version from this one (Xcode's default).", valueName: "version")) var from: String?
+    @Option(help: ArgumentHelp("Up to the next minor version from this one.", valueName: "version")) var minor: String?
+    @Option(help: ArgumentHelp("Exactly this version.", valueName: "version")) var exact: String?
+    @Option(help: ArgumentHelp("A version range, e.g. \"1.0.0..<2.0.0\".", valueName: "range")) var range: String?
+    @Option(help: "A branch.") var branch: String?
+    @Option(help: "A commit.") var revision: String?
+
+    @Option(name: .customLong("product"), help: ArgumentHelp("Product to link (repeatable).", valueName: "name"))
+    var products: [String] = []
+
+    @Option(name: .shortAndLong, help: "Target that uses it (default: the app target).")
+    var target: String?
+
+    @OptionGroup var options: EditOptions
+
+    func run() async throws {
+        try await reportingErrors {
+            let rules: [PackageSpec.Requirement?] = [
+                from.map(PackageSpec.Requirement.upToNextMajor), minor.map(PackageSpec.Requirement.upToNextMinor),
+                exact.map(PackageSpec.Requirement.exact), branch.map(PackageSpec.Requirement.branch),
+                revision.map(PackageSpec.Requirement.revision),
+                try range.map { value -> PackageSpec.Requirement in
+                    let parts = value.components(separatedBy: "..<").map { $0.trimmingCharacters(in: .whitespaces) }
+                    guard parts.count == 2 else { throw ValidationError("A range looks like \"1.0.0..<2.0.0\"") }
+                    return .range(parts[0], parts[1])
+                },
+            ]
+            let given = rules.compactMap { $0 }
+            guard given.count <= 1 else { throw ValidationError("Pick one of --from, --minor, --exact, --range, --branch, --revision.") }
+            Terminal.status("  \(Terminal.dim("reading \(source)…"))")
+            let outcome = try await PackageManager.planAdd(
+                source: source, requirement: given.first, products: products, target: target, path: options.path, force: options.force)
+            try await finishPackageChange(outcome, options: options, success: "added")
+        }
+    }
+}
+
+struct RemovePackage: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "package", abstract: "Remove a Swift package (or stop one target from using it).")
+
+    @Argument(help: "Package name, as `sochi packages` shows it.")
+    var name: String
+
+    @Option(name: .shortAndLong, help: "Only stop this target from using it.")
+    var target: String?
+
+    @OptionGroup var options: EditOptions
+
+    func run() async throws {
+        try await reportingErrors {
+            let outcome = try PackageManager.planRemove(identity: name, target: target, path: options.path, force: options.force)
+            try await finishPackageChange(outcome, options: options, success: "removed")
+        }
+    }
+}
+
+struct Packages: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "List the project's Swift packages and their resolved versions.")
+
+    @Option(name: .customLong("project"), help: "Project directory, .xcodeproj, or .xcworkspace.")
+    var path: String = "."
+
+    func run() async throws {
+        try await reportingErrors {
+            let listing = try PackageManager.list(path: path)
+            if listing.entries.isEmpty && listing.legacy.isEmpty { Terminal.print(Terminal.dim("no Swift packages")) }
+            for entry in listing.entries {
+                let resolved: String
+                if case .local = entry.spec.source { resolved = Terminal.dim("local") }
+                else { resolved = entry.resolved.map { Terminal.green("→ \($0)") } ?? Terminal.yellow("not resolved yet") }
+                let sync = entry.inSync == false ? Terminal.yellow("  differs from sochi.toml (sochi sync)") : ""
+                Terminal.print("  \(Terminal.bold(entry.spec.identity))  \(Terminal.dim(entry.spec.requirementDescription))  \(resolved)\(sync)")
+                for (target, products) in entry.spec.products.sorted(by: { $0.key < $1.key }) {
+                    Terminal.print(Terminal.dim("      \(target): \(products.joined(separator: ", "))"))
+                }
+            }
+            for (target, product) in listing.legacy {
+                Terminal.print("  \(product) \(Terminal.dim("· \(target) · local package added the pre-Xcode 15 way, managed in Xcode"))")
+            }
+            if !listing.hasConfig, !listing.entries.isEmpty {
+                Terminal.print(Terminal.dim("\nno sochi.toml yet: `sochi sync` creates one from these"))
+            }
+        }
+    }
+}
+
+struct Update: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Update packages to the newest versions their rules allow (updates Package.resolved).")
+
+    @Argument(help: "Packages to update (default: all).")
+    var names: [String] = []
+
+    @Option(name: .customLong("project"), help: "Project directory, .xcodeproj, or .xcworkspace.")
+    var path: String = "."
+
+    func run() async throws {
+        try await reportingErrors {
+            let changes = try await PackageManager.update(names, path: path) { step in Terminal.status("  \(Terminal.dim(step + "…"))") }
+            Terminal.clearStatus()
+            if changes.isEmpty { Terminal.success("everything is already at the newest allowed version") }
+            for (identity, change) in changes.sorted(by: { $0.key < $1.key }) {
+                Terminal.success("\(Terminal.bold(identity)) \(change.0 ?? "new") → \(change.1 ?? "removed")")
+            }
+        }
+    }
+}
+
+struct Sync: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Reconcile sochi.toml with the project (creates sochi.toml if there's none).",
+        discussion: """
+            Changes made on either side since the last sync are carried over: packages edited in sochi.toml go into the
+            project, packages added in Xcode go into sochi.toml. If both sides changed the same package, sochi stops and
+            asks instead of guessing. `sochi run` and `sochi build` sync automatically when sochi.toml exists.
+            """)
+
+    @OptionGroup var options: EditOptions
+
+    func run() async throws {
+        try await reportingErrors {
+            let outcome = try PackageManager.planSync(path: options.path, force: options.force)
+            guard !outcome.plan.edits.isEmpty else {
+                PackageManager.acknowledge(outcome)
+                Terminal.success("sochi.toml and the project agree")
+                return
+            }
+            try await finishPackageChange(outcome, options: options, success: "synced")
+        }
+    }
+}
+
+/// Shows a package change's diffs, then (unless dry-running) writes, resolves and validates it.
+private func finishPackageChange(_ outcome: PackageManager.Outcome, options: EditOptions, success: String) async throws {
+    Terminal.clearStatus()
+    for note in outcome.notes { Terminal.print(Terminal.dim("  \(note)")) }
+    for edit in outcome.plan.edits { Terminal.print(try await diff(edit)) }
+    if options.dryRun {
+        Terminal.print(Terminal.dim("dry run: no files written"))
+        return
+    }
+    let finished = try await PackageManager.finish(outcome) { step in Terminal.status("  \(Terminal.dim(step + "…"))") }
+    Terminal.clearStatus()
+    let versions = finished.resolved.sorted(by: { $0.key < $1.key }).map { "\($0.key) \($0.value)" }
+    Terminal.success("\(success) \(Terminal.dim(versions.isEmpty ? "" : "· resolved " + versions.joined(separator: ", ")))")
+}
+
+/// Before building: bring sochi.toml and the project in step, if the project uses sochi.toml.
+func syncPackagesIfConfigured(_ path: String) async throws {
+    guard (try? XcodeProject.locate(path)).map({ FileManager.default.fileExists(atPath: $0.directory.appendingPathComponent(SochiConfig.fileName).path) }) == true
+    else { return }
+    let outcome = try PackageManager.planSync(path: path, force: true)
+    guard !outcome.plan.edits.isEmpty else {
+        PackageManager.acknowledge(outcome)
+        return
+    }
+    for note in outcome.notes { Terminal.print("\(Terminal.cyan("↻")) \(note)") }
+    _ = try await PackageManager.finish(outcome) { step in Terminal.status("  \(Terminal.dim(step + "…"))") }
+    Terminal.clearStatus()
 }

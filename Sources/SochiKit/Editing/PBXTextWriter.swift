@@ -50,9 +50,11 @@ struct PBXTextWriter {
             return
         }
         // Keys after `isa` are alphabetical; place the new list accordingly.
+        // Only real `key = …` lines at key depth count (not the closing lines of nested blocks like `};`).
         let position = lines[(start + 1)..<end].firstIndex { line in
-            guard line.hasPrefix("\t\t\t"), !line.hasPrefix("\t\t\t\t"), !line.hasPrefix("\t\t\tisa = "),
-                  let name = line.trimmingCharacters(in: .whitespaces).components(separatedBy: " = ").first
+            guard line.hasPrefix("\t\t\t"), !line.hasPrefix("\t\t\t\t"), !line.hasPrefix("\t\t\tisa = "), line.contains(" = "),
+                  let name = line.trimmingCharacters(in: .whitespaces).components(separatedBy: " = ").first,
+                  name.first?.isLetter == true
             else { return false }
             return name > key
         } ?? end

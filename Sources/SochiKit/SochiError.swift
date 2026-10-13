@@ -45,6 +45,13 @@ public enum SochiError: Error, CustomStringConvertible {
     case unsupportedTemplateMacro(String)
     case migrationChangesBuild([String])
     case mixedInfoPlist(target: String, missing: [String])
+    case packageResolutionFailed([String])
+    case packageNotResolved(String)
+    case packageHasNoVersions(String)
+    case packageNeedsProduct(String, available: [String])
+    case unknownProduct(String, package: String, available: [String])
+    case unknownPackage(String, available: [String])
+    case packageConflict([String])
     case migrationBaselineFailed([String])
     case unknownProductType(String, suggestions: [String])
     case noEmbedRule(String)
@@ -133,6 +140,23 @@ public enum SochiError: Error, CustomStringConvertible {
             return "The \(name) template embeds in an app; pass the app with --host"
         case .unknownTemplateOption(let option, let available):
             return "Unknown option '\(option)'." + (available.isEmpty ? " This template has no options." : " Options: \(available.joined(separator: ", "))")
+        case .packageResolutionFailed(let errors):
+            return "Resolving packages failed; nothing was changed." + errors.prefix(5).map { "\n  • \($0)" }.joined()
+        case .packageNotResolved(let identity):
+            return "\(identity) wasn't checked out by the resolve; nothing was changed."
+        case .packageHasNoVersions(let url):
+            return "\(url) has no release tags (like 1.2.3). Pick a --branch or --revision."
+        case .packageNeedsProduct(let identity, let available):
+            return available.isEmpty
+                ? "\(identity) has no library products to link."
+                : "\(identity) has several products; choose with --product: \(available.joined(separator: ", "))"
+        case .unknownProduct(let product, let package, let available):
+            return "\(package) has no library product '\(product)'. Available: \(available.joined(separator: ", "))"
+        case .unknownPackage(let name, let available):
+            return "No package named '\(name)'." + (available.isEmpty ? " The project declares none." : " Declared: \(available.joined(separator: ", "))")
+        case .packageConflict(let conflicts):
+            return "sochi.toml and the project disagree, and sochi won't guess which is right. Edit one to match the other, then sync:"
+                + conflicts.map { "\n  • \($0)" }.joined()
         case .mixedInfoPlist(let target, let missing):
             return "\(target) has an Info.plist file in some configurations but not \(missing.joined(separator: ", ")). Set INFOPLIST_FILE for those first so sochi doesn't guess."
         case .migrationChangesBuild(let differences):

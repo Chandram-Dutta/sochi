@@ -832,3 +832,229 @@ import Testing
         #expect(ui == ["TEST_TARGET_NAME": .string("Weather")])
     }
 }
+
+@Suite struct TOMLTests {
+    @Test func parsesTheSubsetSochiUses() throws {
+        let doc = try TOML.parse("""
+            # comment
+            title = "sochi" # trailing
+            [packages.swift-dependencies]
+            url = "https://github.com/pointfreeco/swift-dependencies"
+            from = '1.4.0'
+            products = { App = ["Dependencies"], "My Widget" = [
+                "DependenciesMacros",
+            ] }
+            [packages]
+            mykit = { path = "../MyKit", products = { App = ["MyKit"] } }
+            """)
+        #expect(doc["title"]?.string == "sochi")
+        let deps = try #require(doc["packages"]?["swift-dependencies"])
+        #expect(deps["from"]?.string == "1.4.0")
+        #expect(deps["products"]?["My Widget"]?.array == [.string("DependenciesMacros")])
+        #expect(doc["packages"]?["mykit"]?["path"]?.string == "../MyKit")
+    }
+
+    @Test func rejectsWhatItDoesntSupport() {
+        #expect(throws: TOML.ParseError.self) { try TOML.parse("a = 1.5") }
+        #expect(throws: TOML.ParseError.self) { try TOML.parse("[[things]]") }
+        #expect(throws: TOML.ParseError.self) { try TOML.parse("a = \"x\"\na = \"y\"") }
+    }
+}
+
+@Suite struct SochiConfigTests {
+    let remote = PackageSpec(identity: "swift-dependencies",
+                             source: .remote(url: "https://github.com/pointfreeco/swift-dependencies", requirement: .upToNextMajor("1.4.0")),
+                             products: ["App": ["Dependencies"]])
+
+    @Test func writesBlocksAndKeepsTheRestOfTheFile() throws {
+        var config = try SochiConfig(url: URL(fileURLWithPath: "/tmp/sochi.toml"), text: "# my notes\n[other]\nkeep = true\n")
+        try config.set(remote)
+        try config.set(PackageSpec(identity: "mykit", source: .local(path: "../MyKit"), products: ["App": ["MyKit"]]))
+        #expect(config.packages.map(\.identity) == ["swift-dependencies", "mykit"])
+        #expect(config.text.hasPrefix("# my notes\n[other]\nkeep = true\n"))
+        #expect(config.text.contains("[packages.swift-dependencies]\nurl = \"https://github.com/pointfreeco/swift-dependencies\"\nfrom = \"1.4.0\"\nproducts = { App = [\"Dependencies\"] }"))
+
+        var changed = remote
+        changed.source = .remote(url: "https://github.com/pointfreeco/swift-dependencies", requirement: .exact("1.5.0"))
+        try config.set(changed)
+        #expect(config.packages.first == changed)
+        try config.remove("swift-dependencies")
+        #expect(config.packages.map(\.identity) == ["mykit"])
+        #expect(config.text.contains("keep = true"))
+    }
+
+    @Test func readsTheInlineFormAndRequirements() throws {
+        let config = try SochiConfig(url: URL(fileURLWithPath: "/tmp/sochi.toml"), text: """
+            [packages]
+            a = { url = "https://x/a.git", range = "1.0.0..<2.0.0", products = { App = ["A"] } }
+            b = { url = "https://x/b", branch = "main" }
+            """)
+        #expect(config.packages[0].source == .remote(url: "https://x/a.git", requirement: .range("1.0.0", "2.0.0")))
+        #expect(config.packages[1].source == .remote(url: "https://x/b", requirement: .branch("main")))
+        #expect(PackageSpec.identity(of: "https://github.com/Simperium/simperium-ios/") == "simperium-ios")
+        #expect(PackageSpec.identity(of: "git@github.com:pointfreeco/Swift-Dependencies.git") == "swift-dependencies")
+    }
+}
+
+@Suite struct ProjectPackagesTests {
+    static let fixture = GoldenTemplateTests.root.appendingPathComponent("Fixtures/HelloApp/HelloApp.xcodeproj")
+
+    @Test func roundTripsEditsInXcodesFormat() throws {
+        let file = try PBXProjectFile(projectURL: Self.fixture)
+        #expect(ProjectPackages(file).specs.isEmpty)
+        let deps = PackageSpec(identity: "swift-dependencies",
+                               source: .remote(url: "https://github.com/pointfreeco/swift-dependencies", requirement: .upToNextMajor("1.4.0")),
+                               products: ["HelloApp": ["Dependencies", "DependenciesMacros"]])
+        let kit = PackageSpec(identity: "mykit", source: .local(path: "../MyKit"), products: ["HelloApp": ["MyKit"]])
+        let added = try PBXProjectFile(projectURL: Self.fixture, text: try ProjectPackages.edit(file, set: [deps, kit], remove: []))
+        let read = ProjectPackages(added)
+        #expect(read.specs["swift-dependencies"] == deps && read.specs["mykit"] == kit)
+        #expect(added.text.contains("requirement = {\n\t\t\t\tkind = upToNextMajorVersion;\n\t\t\t\tminimumVersion = 1.4.0;\n\t\t\t};"))
+        #expect(added.text.contains("productRef = "))
+
+        // Change the requirement and drop one product; then remove the package entirely.
+        var narrowed = deps
+        narrowed.source = .remote(url: "https://github.com/pointfreeco/swift-dependencies", requirement: .exact("1.6.0"))
+        narrowed.products = ["HelloApp": ["Dependencies"]]
+        let changed = try PBXProjectFile(projectURL: Self.fixture, text: try ProjectPackages.edit(added, set: [narrowed], remove: []))
+        #expect(ProjectPackages(changed).specs["swift-dependencies"] == narrowed)
+        #expect(!changed.text.contains("DependenciesMacros"))
+        let removed = try PBXProjectFile(projectURL: Self.fixture, text: try ProjectPackages.edit(changed, set: [], remove: ["swift-dependencies"]))
+        #expect(ProjectPackages(removed).specs.keys.sorted() == ["mykit"])
+        #expect(!removed.text.contains("swift-dependencies"))
+    }
+
+    @Test func readsSimplenotesRealPackageSection() throws {
+        // Excerpt of Simplenote's project, as Xcode wrote it.
+        let text = """
+        // !$*UTF8*$!
+        {
+        \tobjectVersion = 77;
+        \tobjects = {
+        \t\tB1 /* ScreenObject in Frameworks */ = {isa = PBXBuildFile; productRef = D1 /* ScreenObject */; };
+        \t\tT1 /* Simplenote */ = {
+        \t\t\tisa = PBXNativeTarget;
+        \t\t\tname = Simplenote;
+        \t\t\tpackageProductDependencies = (
+        \t\t\t\tD1 /* ScreenObject */,
+        \t\t\t);
+        \t\t};
+        \t\tP1 /* Project object */ = {
+        \t\t\tisa = PBXProject;
+        \t\t\tpackageReferences = (
+        \t\t\t\tR1 /* XCRemoteSwiftPackageReference "ScreenObject" */,
+        \t\t\t\tR2 /* XCRemoteSwiftPackageReference "simperium-ios" */,
+        \t\t\t);
+        \t\t\ttargets = (
+        \t\t\t\tT1 /* Simplenote */,
+        \t\t\t);
+        \t\t};
+        \t\tR1 /* XCRemoteSwiftPackageReference "ScreenObject" */ = {
+        \t\t\tisa = XCRemoteSwiftPackageReference;
+        \t\t\trepositoryURL = "https://github.com/Automattic/ScreenObject";
+        \t\t\trequirement = {
+        \t\t\t\tkind = upToNextMajorVersion;
+        \t\t\t\tminimumVersion = 0.3.0;
+        \t\t\t};
+        \t\t};
+        \t\tR2 /* XCRemoteSwiftPackageReference "simperium-ios" */ = {
+        \t\t\tisa = XCRemoteSwiftPackageReference;
+        \t\t\trepositoryURL = "https://github.com/Simperium/simperium-ios/";
+        \t\t\trequirement = {
+        \t\t\t\tbranch = "v1.9.1-beta.2";
+        \t\t\t\tkind = branch;
+        \t\t\t};
+        \t\t};
+        \t\tD1 /* ScreenObject */ = {
+        \t\t\tisa = XCSwiftPackageProductDependency;
+        \t\t\tpackage = R1 /* XCRemoteSwiftPackageReference "ScreenObject" */;
+        \t\t\tproductName = ScreenObject;
+        \t\t};
+        \t};
+        \trootObject = P1 /* Project object */;
+        }
+        """
+        let packages = ProjectPackages(try PBXProjectFile(projectURL: URL(fileURLWithPath: "/tmp/S.xcodeproj"), text: text))
+        #expect(packages.specs["screenobject"]?.products == ["Simplenote": ["ScreenObject"]])
+        #expect(packages.specs["screenobject"]?.source == .remote(url: "https://github.com/Automattic/ScreenObject", requirement: .upToNextMajor("0.3.0")))
+        #expect(packages.specs["simperium-ios"]?.source == .remote(url: "https://github.com/Simperium/simperium-ios/", requirement: .branch("v1.9.1-beta.2")))
+    }
+}
+
+/// Two-way sync decisions between sochi.toml and the project (no network: planning only).
+@Suite struct PackageSyncTests {
+    let deps = PackageSpec(identity: "swift-dependencies",
+                           source: .remote(url: "https://github.com/pointfreeco/swift-dependencies", requirement: .upToNextMajor("1.4.0")),
+                           products: ["HelloApp": ["Dependencies"]])
+
+    /// A HelloApp copy whose project declares `projectSpecs`, with an optional sochi.toml and sync snapshot.
+    func setup(project projectSpecs: [PackageSpec], config: [PackageSpec]?, base: [PackageSpec]?) throws -> (String, () -> Void) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sochi-sync-\(UUID().uuidString)")
+        try FileManager.default.copyItem(at: GoldenTemplateTests.root.appendingPathComponent("Fixtures/HelloApp"), to: dir)
+        let projectURL = dir.appendingPathComponent("HelloApp.xcodeproj")
+        let file = try PBXProjectFile(projectURL: projectURL)
+        try ProjectPackages.edit(file, set: projectSpecs, remove: []).write(to: file.pbxprojURL, atomically: true, encoding: .utf8)
+        if let config {
+            var toml = SochiConfig.new(projectDirectory: dir)
+            for spec in config { try toml.set(spec) }
+            try toml.write()
+        }
+        let project = XcodeProject(kind: .project, url: projectURL)
+        if let base { PackageManager.saveBase(Dictionary(base.map { ($0.identity, $0) }, uniquingKeysWith: { a, _ in a }), for: project) }
+        return (dir.path, {
+            try? FileManager.default.removeItem(at: dir)
+            try? FileManager.default.removeItem(at: PackageManager.baseURL(project).deletingLastPathComponent())
+        })
+    }
+
+    func edited(_ outcome: PackageManager.Outcome) -> Set<String> { Set(outcome.plan.edits.map(\.url.lastPathComponent)) }
+
+    @Test func createsSochiTomlFromTheProject() throws {
+        let (path, cleanup) = try setup(project: [deps], config: nil, base: nil)
+        defer { cleanup() }
+        let outcome = try PackageManager.planSync(path: path, force: true)
+        #expect(edited(outcome) == ["sochi.toml"])
+        let toml = String(decoding: outcome.plan.edits[0].updated, as: UTF8.self)
+        #expect(toml.contains("[packages.swift-dependencies]") && toml.contains("from = \"1.4.0\""))
+    }
+
+    @Test func carriesHandEditsIntoTheProject() throws {
+        var newer = deps
+        newer.source = .remote(url: "https://github.com/pointfreeco/swift-dependencies", requirement: .exact("1.5.0"))
+        let (path, cleanup) = try setup(project: [deps], config: [newer], base: [deps])
+        defer { cleanup() }
+        let outcome = try PackageManager.planSync(path: path, force: true)
+        #expect(edited(outcome) == ["project.pbxproj"])
+        #expect(outcome.notes.contains { $0.contains("sochi.toml changed it") })
+    }
+
+    @Test func carriesXcodeChangesIntoSochiToml() throws {
+        var older = deps
+        older.source = .remote(url: "https://github.com/pointfreeco/swift-dependencies", requirement: .upToNextMajor("1.0.0"))
+        let (path, cleanup) = try setup(project: [deps], config: [older], base: [older])
+        defer { cleanup() }
+        #expect(edited(try PackageManager.planSync(path: path, force: true)) == ["sochi.toml"])
+    }
+
+    @Test func removalsNeedEvidence() throws {
+        // In the snapshot and still in the project, gone from sochi.toml: removed on purpose.
+        let (path, cleanup) = try setup(project: [deps], config: [], base: [deps])
+        defer { cleanup() }
+        let outcome = try PackageManager.planSync(path: path, force: true)
+        #expect(outcome.notes.contains { $0.contains("removed from sochi.toml") })
+        // No snapshot (fresh clone): never delete, only add.
+        let (fresh, cleanupFresh) = try setup(project: [deps], config: [], base: nil)
+        defer { cleanupFresh() }
+        let add = try PackageManager.planSync(path: fresh, force: true)
+        #expect(edited(add) == ["sochi.toml"] && add.notes.contains { $0.contains("added in the project") })
+    }
+
+    @Test func refusesToGuessConflicts() throws {
+        var a = deps, b = deps
+        a.source = .remote(url: "https://github.com/pointfreeco/swift-dependencies", requirement: .exact("1.5.0"))
+        b.source = .remote(url: "https://github.com/pointfreeco/swift-dependencies", requirement: .exact("1.6.0"))
+        let (path, cleanup) = try setup(project: [a], config: [b], base: [deps])
+        defer { cleanup() }
+        #expect(throws: SochiError.self) { try PackageManager.planSync(path: path, force: true) }
+    }
+}

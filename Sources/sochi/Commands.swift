@@ -9,6 +9,7 @@ struct Run: AsyncParsableCommand {
 
     func run() async throws {
         try await reportingErrors {
+            try await syncPackagesIfConfigured(options.path)
             var session = try await options.resolve()
 
             // Settings are never cached: query them fresh, hidden behind the build.
@@ -54,6 +55,7 @@ struct Build: AsyncParsableCommand {
 
     func run() async throws {
         try await reportingErrors {
+            try await syncPackagesIfConfigured(options.path)
             var session = try await options.resolve()
             try await buildWithProgress(&session)
         }

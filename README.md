@@ -42,6 +42,31 @@ sochi migrate --move-files                   # also give virtual groups real fol
 
 `sochi --help` lists every command; `sochi <command> -h` explains one, with examples.
 
+## Swift packages and sochi.toml
+
+```sh
+sochi add package pointfreeco/swift-dependencies --product Dependencies   # newest release, "up to next major"
+sochi add package apple/swift-collections --exact 1.1.4 --product OrderedCollections
+sochi add package ../MyKit                   # local package
+sochi packages                               # what's declared, used by which targets, resolved to which version
+sochi update [package]                       # newest versions the rules allow
+sochi remove package swift-collections
+```
+
+Packages are recorded in a readable `sochi.toml` next to your project:
+
+```toml
+[packages.swift-dependencies]
+url = "https://github.com/pointfreeco/swift-dependencies"
+from = "1.17.1"                              # or: minor, exact, range = "1.0.0..<2.0.0", branch, revision
+products = { App = ["Dependencies"] }
+```
+
+The Xcode project and `Package.resolved` (the lockfile) remain what Xcode reads, and sochi keeps them in step with
+`sochi.toml` both ways: edit the file by hand or add a package in Xcode, and `sochi sync` (run automatically before
+`sochi run` and `sochi build`) carries the change across. If both sides changed the same package, sochi asks rather
+than guessing. Products are checked against the package's own manifest, and nothing is written if resolving fails.
+
 ## Develop
 
 ```sh

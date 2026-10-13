@@ -274,8 +274,9 @@ public enum Paths {
             .appendingPathComponent("state.json")
     }
 
+    /// Stable per project: the symlink-resolved path, so /tmp vs /private/tmp (or a linked folder) is one project.
     static func projectID(_ project: XcodeProject) -> String {
-        "\(project.name)-\(fnv1a(project.url.path))"
+        "\(project.name)-\(fnv1a(project.url.resolvingSymlinksInPath().path))"
     }
 
     /// Stable across runs, unlike `hashValue`.
