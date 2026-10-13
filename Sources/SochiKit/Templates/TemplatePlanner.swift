@@ -107,6 +107,23 @@ extension ProjectEditor {
             spec.frameworks = output.frameworks
             spec.embed = embedHost != nil
             spec.sdk = sdk
+            // A test bundle tests the sibling it names, or else the host app.
+            if output.testedTargetIdentifier != nil {
+                let tested = output.testedTargetIdentifier.flatMap { created[$0] }.flatMap { id in current.targets.first { $0.id == id } }
+                    ?? current.targets.first { $0.id == host.id }
+                if let tested {
+                    spec.dependencies = [(tested.id, tested.name)]
+                    for config in host.configurations {
+                        let source = tested.configurations.first { $0.name == config.name }?.buildSettings ?? [:]
+                        let copied = output.settingsToCopyFromTested.reduce(into: [String: String]()) { result, key in
+                            result[key] = source[key] as? String ?? (tested.id == host.id ? resolved.settings[config.name]?[key] : nil)
+                        }
+                        TestWiring.apply(to: &spec.configurationSettings[config.name, default: [:]], productType: output.productType,
+                                         testedName: tested.name, copied: copied)
+                    }
+                    notes.append("\(output.targetName): tests \(tested.name)")
+                }
+            }
             let rendered = try TargetBuilder.render(spec, in: current, host: embedHost ?? host, specs: specs, toolsVersion: version)
             current = try PBXProjectFile(projectURL: file.projectURL, text: rendered.text)
             if let identifier = output.targetIdentifier { created[identifier] = rendered.targetID }

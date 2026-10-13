@@ -29,6 +29,8 @@ public struct TargetSpec: Sendable {
     public var embed = true
     /// The product's SDK (e.g. `watchos`), for platform-specific embed rules; nil means the host's platform.
     public var sdk: String?
+    /// Existing targets the new target depends on (e.g. the app a test bundle tests).
+    public var dependencies: [(id: String, name: String)] = []
 
     public init(name: String, folder: String, productType: String) {
         self.name = name
@@ -124,6 +126,28 @@ enum TargetBuilder {
             ], id: phase, isa: isa)
         }
 
+        // The new target's own dependencies, each through a container item proxy as Xcode writes them.
+        var dependencyEntries: [String] = []
+        for dependencyTarget in spec.dependencies {
+            let proxy = id(), dependency = id()
+            writer.insert(object: [
+                "\t\t\(proxy) /* PBXContainerItemProxy */ = {",
+                "\t\t\tisa = PBXContainerItemProxy;",
+                "\t\t\tcontainerPortal = \(file.rootID) /* Project object */;",
+                "\t\t\tproxyType = 1;",
+                "\t\t\tremoteGlobalIDString = \(dependencyTarget.id);",
+                "\t\t\tremoteInfo = \(q(dependencyTarget.name));",
+                "\t\t};",
+            ], id: proxy, isa: "PBXContainerItemProxy")
+            writer.insert(object: [
+                "\t\t\(dependency) /* PBXTargetDependency */ = {",
+                "\t\t\tisa = PBXTargetDependency;",
+                "\t\t\ttarget = \(dependencyTarget.id) /* \(dependencyTarget.name) */;",
+                "\t\t\ttargetProxy = \(proxy) /* PBXContainerItemProxy */;",
+                "\t\t};",
+            ], id: dependency, isa: "PBXTargetDependency")
+            dependencyEntries.append("\t\t\t\t\(dependency) /* PBXTargetDependency */,")
+        }
         writer.insert(object: [
             "\t\t\(target) /* \(spec.name) */ = {",
             "\t\t\tisa = PBXNativeTarget;",
@@ -136,6 +160,7 @@ enum TargetBuilder {
             "\t\t\tbuildRules = (",
             "\t\t\t);",
             "\t\t\tdependencies = (",
+        ] + dependencyEntries + [
             "\t\t\t);",
             "\t\t\tfileSystemSynchronizedGroups = (",
             "\t\t\t\t\(group) /* \(spec.folder) */,",
@@ -295,6 +320,23 @@ enum TargetBuilder {
             (objects[phase]?["files"] as? [String] ?? []).contains { objects[$0]?["fileRef"] as? String == product }
         }
         guard embedded else { throw fail("product not embedded in host") }
+    }
+}
+
+/// How a test bundle is connected to the target it tests. Templates name that target (`TargetIdentifierToBeTested`)
+/// and settings to copy from it; the connecting settings themselves are written by Xcode's own code, in these forms.
+enum TestWiring {
+    static func apply(to settings: inout [String: TargetSpec.Setting], productType: String, testedName: String,
+                      copied: [String: String]) {
+        for (key, value) in copied { settings[key] = .string(value) }
+        switch productType {
+        case "com.apple.product-type.bundle.unit-test":
+            settings["TEST_HOST"] = .string("$(BUILT_PRODUCTS_DIR)/\(testedName).app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/\(testedName)")
+            settings["BUNDLE_LOADER"] = .string("$(TEST_HOST)")
+        case "com.apple.product-type.bundle.ui-testing":
+            settings["TEST_TARGET_NAME"] = .string(testedName)
+        default: break
+        }
     }
 }
 

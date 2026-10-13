@@ -128,7 +128,7 @@ public enum SochiError: Error, CustomStringConvertible {
         case .ambiguousTemplate(let query, let candidates):
             return "'\(query)' matches several templates: \(candidates.joined(separator: ", ")). Use the full name."
         case .unsupportedTemplate(let name, let reason):
-            return "sochi can't run the \(name) template yet: \(reason). Use `sochi add target <Name> --type …` instead."
+            return "sochi can't run the \(name) template yet: \(reason)."
         case .templateNeedsHost(let name):
             return "The \(name) template embeds in an app; pass the app with --host"
         case .unknownTemplateOption(let option, let available):

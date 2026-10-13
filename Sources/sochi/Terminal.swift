@@ -50,6 +50,8 @@ final class BuildRenderer: @unchecked Sendable {
     private(set) var taskCount = 0
     private(set) var errorCount = 0
     private(set) var warningCount = 0
+    /// Error messages seen, for hints after a failed build.
+    private(set) var errorMessages: [String] = []
     private var seen = Set<Diagnostic>()
     /// Errors a retry may resolve; shown only if the build ultimately fails.
     private var deferred: [Diagnostic] = []
@@ -87,7 +89,7 @@ final class BuildRenderer: @unchecked Sendable {
     }
 
     private func show(_ diagnostic: Diagnostic) {
-        if diagnostic.severity == .error { errorCount += 1 } else { warningCount += 1 }
+        if diagnostic.severity == .error { errorCount += 1; errorMessages.append(diagnostic.message) } else { warningCount += 1 }
         Terminal.clearStatus()
         render(diagnostic)
     }

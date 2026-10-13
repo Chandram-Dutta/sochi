@@ -44,6 +44,11 @@ struct TemplateOutput {
     /// The product name used for this target's folder and macros (a component's own `Name`).
     var productName: String = ""
     var isComponent = false
+    /// The template's project-level settings by configuration (what a new project gets at project level).
+    var projectSettings: [String: [String: TargetSpec.Setting]] = [:]
+    /// For test bundles: the template target identifier of the target under test, and settings to copy from it.
+    var testedTargetIdentifier: String?
+    var settingsToCopyFromTested: [String] = []
 }
 
 /// Interprets Xcode's TemplateInfo.plist format: options and the units they select, `___MACRO___` expansion,
@@ -172,7 +177,9 @@ struct TemplateEngine {
             frameworks: target["Frameworks"] as? [String] ?? [],
             embed: resolved.association.map { $0["AssociatedTargetNeedsProductBuildPhaseInjection"] as? Bool ?? true } ?? false,
             resolvedOptions: values, targetIdentifier: target["TargetIdentifier"] as? String,
-            productName: context.name, isComponent: isComponent)
+            productName: context.name, isComponent: isComponent,
+            testedTargetIdentifier: target["TargetIdentifierToBeTested"] as? String,
+            settingsToCopyFromTested: target["SettingsToCopyFromTargetBeingTested"] as? [String] ?? [])
 
         // Files and Info.plist fragments.
         var infoPlist: [String: Any] = [:]
@@ -215,6 +222,19 @@ struct TemplateEngine {
         let projectConfigs = resolved.project["Configurations"] as? [String: [String: Any]] ?? [:]
         let targetShared = target["SharedSettings"] as? [String: Any] ?? [:]
         let targetConfigs = target["Configurations"] as? [String: [String: Any]] ?? [:]
+        func setting(_ key: String, _ raw: Any) throws -> TargetSpec.Setting {
+            let value = try macros.expand("\(raw)", file: nil)
+            // Observed in Xcode's output (Fixtures/Golden): list-typed settings are written as arrays when they
+            // extend an inherited value, and kept as strings otherwise. Both forms build identically.
+            let asList = specs.listSettings.contains(key) && value.contains("$(inherited)")
+            return asList ? .list(Self.splitList(value)) : .string(value)
+        }
+        for config in configurations {
+            var projectLevel = try projectShared.merging(projectConfigs[config] ?? [:]) { $1 }.mapValues { $0 }
+                .reduce(into: [String: TargetSpec.Setting]()) { $0[$1.key] = try setting($1.key, $1.value) }
+            if let sdk = resolved.project["SDK"] as? String { projectLevel["SDKROOT"] = .string(sdk) }
+            output.projectSettings[config] = projectLevel
+        }
         for config in configurations {
             let existing = projectSettings[config] ?? [:]
             var merged = projectShared.merging(projectConfigs[config] ?? [:]) { $1 }.filter { existing[$0.key] == nil }

@@ -727,3 +727,108 @@ import Testing
         #expect(after.differences(from: before).contains("App: now compiles App/util.c"))
     }
 }
+
+/// `sochi migrate --move-files`: virtual groups get real folders by moving files, safely.
+@Suite struct ReorganizerTests {
+    /// The classic fixture plus a virtual "Support" group holding Info.plist (referenced by INFOPLIST_FILE).
+    func project(extra: (inout String) -> Void = { _ in }, files: [String: String] = [:]) throws -> PBXProjectFile {
+        try MigrationTests().classicCopy(edit: { text in
+            text = text.replacingOccurrences(of: "\t\t\t\tC0F0000000000000000000F7 /* Info.plist */,\n", with: "\t\t\t\tC0G000000000000000000G08 /* Support */,\n")
+            text = text.replacingOccurrences(of: "/* End PBXGroup section */", with: """
+                		C0G000000000000000000G08 /* Support */ = {
+                			isa = PBXGroup;
+                			children = (
+                				C0F0000000000000000000F7 /* Info.plist */,
+                			);
+                			name = Support;
+                			sourceTree = "<group>";
+                		};
+                /* End PBXGroup section */
+                """)
+            extra(&text)
+        }, extraFiles: files)
+    }
+
+    @Test func plansMovesAndRewritesSettings() throws {
+        let plan = try Reorganizer.plan(try project())
+        #expect(plan.moves.contains(.init(from: "ClassicApp/Info.plist", to: "ClassicApp/Support/Info.plist")))
+        #expect(plan.moves.contains(.init(from: "Notes.md", to: "Docs/Notes.md")))
+        #expect(plan.text.contains("INFOPLIST_FILE = ClassicApp/Support/Info.plist;"))
+        let objects = try PBXProjectFile.objects(in: plan.text, path: "x")
+        let support = objects["C0G000000000000000000G08"]!
+        #expect(support["path"] as? String == "Support" && support["name"] == nil)
+        #expect(objects["C0F0000000000000000000F7"]?["path"] as? String == "Info.plist")
+    }
+
+    @Test func refusesPathsUsedWhereItCantRewrite() throws {
+        let plan = try Reorganizer.plan(try project(files: ["Config/Base.xcconfig": "INFOPLIST_FILE = ClassicApp/Info.plist\n"]))
+        #expect(!plan.moves.contains { $0.from == "ClassicApp/Info.plist" })
+        #expect(plan.skipped.contains { $0.group == "Support" && $0.reason.contains("Base.xcconfig") })
+        // Other groups still move.
+        #expect(plan.moves.contains { $0.from == "Notes.md" })
+    }
+
+    @Test func refusesExistingDestinations() throws {
+        let plan = try Reorganizer.plan(try project(files: ["ClassicApp/Support/Info.plist": "different"]))
+        #expect(plan.skipped.contains { $0.group == "Support" && $0.reason.contains("already exists") })
+    }
+
+    @Test func movesAndUndoesCleanly() throws {
+        let file = try project()
+        let plan = try Reorganizer.plan(file)
+        let root = file.projectDirectory
+        let undo = try Reorganizer.perform(plan)
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("ClassicApp/Support/Info.plist").path))
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("ClassicApp/Info.plist").path))
+        undo()
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("ClassicApp/Info.plist").path))
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("Notes.md").path))
+        // Folders it created are gone again.
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("ClassicApp/Support").path))
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("Docs").path))
+    }
+
+    @Test func editsKeysInXcodesLayout() {
+        var writer = PBXTextWriter("""
+        \t\tA1 /* x */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Old; path = "a/b c.swift"; sourceTree = SOURCE_ROOT; };
+        \t\tG1 /* g */ = {
+        \t\t\tisa = PBXGroup;
+        \t\t\tchildren = (
+        \t\t\t);
+        \t\t\tname = Support;
+        \t\t\tsourceTree = "<group>";
+        \t\t};
+        """)
+        writer.setKeys(["path": "b c.swift", "sourceTree": "<group>"], removing: ["name"], of: "A1")
+        writer.setKeys(["path": "Support"], removing: ["name"], of: "G1")
+        #expect(writer.lines[0] == "\t\tA1 /* x */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = \"b c.swift\"; sourceTree = \"<group>\"; };")
+        #expect(writer.lines.contains("\t\t\tpath = Support;") && !writer.lines.contains("\t\t\tname = Support;"))
+        #expect(writer.lines.firstIndex(of: "\t\t\tpath = Support;")! < writer.lines.firstIndex(of: "\t\t\tsourceTree = \"<group>\";")!)
+    }
+}
+
+@Suite struct ProjectCreatorTests {
+    @Test func skeletonIsAValidEmptyProject() throws {
+        let text = ProjectCreator.skeleton(
+            name: "Weather", settings: ["Debug": ["SDKROOT": .string("iphoneos"), "GCC_PREPROCESSOR_DEFINITIONS": .list(["DEBUG=1", "$(inherited)"])],
+                                        "Release": ["SDKROOT": .string("iphoneos")]],
+            toolsVersion: "27.0")
+        let file = try PBXProjectFile(projectURL: URL(fileURLWithPath: "/tmp/Weather.xcodeproj"), text: text)
+        #expect(file.objectVersion == 77 && file.targets.isEmpty)
+        #expect(file.projectConfigurationNames == ["Debug", "Release"])
+        #expect(file.projectBuildSettings["Debug"]?["GCC_PREPROCESSOR_DEFINITIONS"] as? [String] == ["DEBUG=1", "$(inherited)"])
+        #expect(text.contains("LastUpgradeCheck = 2700;"))
+    }
+
+    @Test func wiresTestBundlesToTheTestedApp() {
+        var unit: [String: TargetSpec.Setting] = [:]
+        TestWiring.apply(to: &unit, productType: "com.apple.product-type.bundle.unit-test", testedName: "Weather",
+                         copied: ["IPHONEOS_DEPLOYMENT_TARGET": "18.0"])
+        #expect(unit["TEST_HOST"] == .string("$(BUILT_PRODUCTS_DIR)/Weather.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Weather"))
+        #expect(unit["BUNDLE_LOADER"] == .string("$(TEST_HOST)"))
+        #expect(unit["IPHONEOS_DEPLOYMENT_TARGET"] == .string("18.0"))
+        var ui: [String: TargetSpec.Setting] = [:]
+        TestWiring.apply(to: &ui, productType: "com.apple.product-type.bundle.ui-testing", testedName: "Weather", copied: [:])
+        #expect(ui == ["TEST_TARGET_NAME": .string("Weather")])
+    }
+}

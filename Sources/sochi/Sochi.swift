@@ -8,7 +8,7 @@ struct Sochi: AsyncParsableCommand {
         commandName: "sochi",
         abstract: "Build and run Apple platform apps without opening Xcode.",
         version: "0.0.1",
-        subcommands: [Run.self, Build.self, Add.self, Remove.self, CapabilitiesCommand.self, EntitlementsCommand.self, Templates.self, Migrate.self,
+        subcommands: [Run.self, Build.self, Add.self, Remove.self, CapabilitiesCommand.self, EntitlementsCommand.self, Templates.self, Migrate.self, New.self,
                       Devices_.self, Sims.self, Doctor.self]
     )
 }
@@ -76,6 +76,9 @@ func buildWithProgress(_ session: inout Session) async throws {
         renderer.dumpTailIfUnexplained()
         let errors = renderer.errorCount == 1 ? "1 error" : "\(renderer.errorCount) errors"
         Terminal.failure("build failed in \(elapsed) \(Terminal.dim("(\(errors))"))")
+        if session.destination.isDevice, renderer.errorMessages.contains(where: { $0.contains("waiting for all destinations") || $0.contains("Unable to find a destination") }) {
+            Terminal.print(Terminal.yellow("  \(session.destination.name) didn't answer. Unlock it and keep it awake (or connect it with a cable), then run again."))
+        }
         throw ExitCode.failure
     }
 }

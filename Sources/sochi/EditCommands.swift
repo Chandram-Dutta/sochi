@@ -539,8 +539,15 @@ struct Migrate: AsyncParsableCommand {
     @Flag(help: "Convert even if the project looks generated (XcodeGen, Tuist).")
     var force = false
 
+    @Flag(help: "Also give virtual groups real folders by moving their files (verified by building; rolled back on any difference).")
+    var moveFiles = false
+
     func run() async throws {
         try await reportingErrors {
+            if moveFiles {
+                try await runMovingFiles()
+                return
+            }
             Terminal.status("  \(Terminal.dim("analyzing groups…"))")
             let (plan, report) = try await Migration.plan(path: path, force: force)
             Terminal.clearStatus()
@@ -578,6 +585,101 @@ struct Migrate: AsyncParsableCommand {
             try await ProjectEditor.apply(plan)
             Terminal.clearStatus()
             Terminal.success("converted \(report.converted.count) folder\(report.converted.count == 1 ? "" : "s") \(Terminal.dim("· the project now needs Xcode 16 or later"))")
+        }
+    }
+
+    private func runMovingFiles() async throws {
+        Terminal.status("  \(Terminal.dim("planning moves…"))")
+        let reorganization = try Reorganizer.plan(path: path, force: force)
+        Terminal.clearStatus()
+        let byFolder = Dictionary(grouping: reorganization.moves) { ($0.to as NSString).deletingLastPathComponent }
+        for folder in byFolder.keys.sorted() {
+            Terminal.print("\(Terminal.green("→")) \(Terminal.bold(folder))/ \(Terminal.dim("← \(byFolder[folder]!.count) file\(byFolder[folder]!.count == 1 ? "" : "s")"))")
+            if dryRun {
+                for move in byFolder[folder]!.sorted(by: { $0.from < $1.from }) { Terminal.print(Terminal.dim("    \(move.from)")) }
+            }
+        }
+        for skipped in reorganization.skipped {
+            Terminal.print("\(Terminal.yellow("·")) \(skipped.group) \(Terminal.dim("not moved: \(skipped.reason)"))")
+        }
+        guard !reorganization.moves.isEmpty || !reorganization.groups.isEmpty else {
+            Terminal.print(Terminal.dim("no files need moving; running the regular migration"))
+            var plain = self
+            plain.moveFiles = false
+            try await plain.run()
+            return
+        }
+        if dryRun {
+            Terminal.print(Terminal.dim("dry run: \(reorganization.moves.count) moves planned, then the regular migration; nothing changed"))
+            return
+        }
+        let (report, inventory) = try await Migration.moveAndConvert(reorganization, verify: !noVerify) { step in
+            Terminal.status("  \(Terminal.dim(step + "…"))")
+        }
+        Terminal.clearStatus()
+        if let inventory {
+            Terminal.success("builds identically \(Terminal.dim("(\(inventory.sourceCount) compiled sources at their new paths, \(inventory.productFileCount) bundled files)"))")
+        }
+        Terminal.success("moved \(reorganization.moves.count) files and converted \(report.converted.count) folders "
+            + Terminal.dim("· review with `git status`; the project now needs Xcode 16 or later"))
+        for skipped in report.skipped { Terminal.print("\(Terminal.yellow("·")) \(skipped.group) \(Terminal.dim("stays a group: \(skipped.reason)"))") }
+    }
+}
+
+// MARK: - sochi new
+
+struct New: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Create a new project from one of Xcode's project templates (the iOS App by default).",
+        discussion: """
+            Runs the selected Xcode's own template, so the project is what File › New › Project would create.
+            The organization identifier (bundle ID prefix) is remembered after the first --org.
+
+            Examples:
+              sochi new Weather --org dev.example
+              sochi new Weather --option storageType=SwiftData
+              sochi new Arcade --template game --option gameType=SpriteKit
+            """)
+
+    @Argument(help: "Project and app name.")
+    var name: String
+
+    @Option(help: "Template (see `sochi templates`).")
+    var template: String = "app"
+
+    @Option(help: ArgumentHelp("Organization identifier, the bundle ID prefix (remembered).", valueName: "id"))
+    var org: String?
+
+    @Option(help: "Development team ID for signing.")
+    var team: String?
+
+    @Option(name: .customLong("option"), help: ArgumentHelp("Template option, e.g. storageType=SwiftData (repeatable).", valueName: "key=value"))
+    var templateOptions: [String] = []
+
+    @Option(help: "Directory to create the project in.")
+    var directory: String = "."
+
+    func run() async throws {
+        try await reportingErrors {
+            var parsed: [String: String] = [:]
+            for option in templateOptions {
+                let parts = option.split(separator: "=", maxSplits: 1).map(String.init)
+                guard parts.count == 2 else { throw ValidationError("Options look like key=value, got '\(option)'") }
+                parsed[parts[0]] = parts[1]
+            }
+            let organization = org ?? ProjectCreator.rememberedOrganization.flatMap { $0.isEmpty ? nil : $0 }
+            Terminal.status("  \(Terminal.dim("creating \(name) from Xcode's \(template) template…"))")
+            let result = try await ProjectCreator.create(
+                name: name, in: URL(fileURLWithPath: directory, isDirectory: true).standardizedFileURL,
+                template: template, options: parsed, organization: organization, team: team)
+            Terminal.clearStatus()
+            if let org { ProjectCreator.rememberedOrganization = org }
+            Terminal.success("created \(Terminal.bold(result.project.lastPathComponent)) "
+                + Terminal.dim("· \(result.targets.joined(separator: ", "))" + (result.bundleIdentifier.map { " · \($0)" } ?? "")))
+            if organization == nil {
+                Terminal.print(Terminal.yellow("  no --org given: the bundle ID uses Xcode's placeholder prefix; pass --org next time (it's remembered)"))
+            }
+            Terminal.print(Terminal.dim("  next: cd \(name) && sochi run"))
         }
     }
 }
