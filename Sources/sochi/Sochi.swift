@@ -76,6 +76,9 @@ func buildWithProgress(_ session: inout Session) async throws {
         renderer.dumpTailIfUnexplained()
         let errors = renderer.errorCount == 1 ? "1 error" : "\(renderer.errorCount) errors"
         Terminal.failure("build failed in \(elapsed) \(Terminal.dim("(\(errors))"))")
+        if renderer.errorMessages.contains(where: { $0.contains("unable to attach DB") || $0.contains("database is locked") }) {
+            Terminal.print(Terminal.yellow("  Another build of this project is running (sochi, Xcode or xcodebuild). Let it finish, then run again."))
+        }
         if session.destination.isDevice, renderer.errorMessages.contains(where: { $0.contains("waiting for all destinations") || $0.contains("Unable to find a destination") }) {
             Terminal.print(Terminal.yellow("  \(session.destination.name) didn't answer. Unlock it and keep it awake (or connect it with a cable), then run again."))
         }
