@@ -9,10 +9,20 @@ public struct Device: Sendable, Equatable {
     public let osVersion: String
     /// `connected`, `disconnected` (reachable, tunnel not up yet), or `unavailable` (not reachable).
     public let tunnelState: String
-    public let developerModeEnabled: Bool
+    /// nil when CoreDevice hasn't fetched it yet (a device it hasn't connected to since pairing or since it restarted).
+    public let developerModeEnabled: Bool?
 
     /// devicectl brings the tunnel up on demand, so anything not `unavailable` is usable.
     public var isReachable: Bool { tunnelState != "unavailable" }
+
+    /// How the device's state reads to a person: "disconnected" only means the tunnel isn't up yet.
+    public var status: String {
+        switch tunnelState {
+        case "connected": "connected"
+        case "unavailable": "unavailable"
+        default: "available"
+        }
+    }
 }
 
 public enum Devices {
@@ -29,7 +39,8 @@ public enum Devices {
             struct Connection: Decodable { let tunnelState: String? }
             struct Properties: Decodable { let name: String?; let osVersionNumber: String?; let developerModeStatus: String? }
             struct Hardware: Decodable {
-                let udid: String?; let marketingName: String?; let platform: String?; let reality: String?
+                let udid: String?; let marketingName: String?; let deviceType: String?; let productType: String?
+                let platform: String?; let reality: String?
             }
             let connectionProperties: Connection
             let deviceProperties: Properties
@@ -39,28 +50,53 @@ public enum Devices {
 
         return try JSONDecoder().decode(Output.self, from: json).result.devices.compactMap { entry in
             let hw = entry.hardwareProperties
-            guard hw.reality == "physical", let udid = hw.udid else { return nil }
+            // CoreDevice fills in `reality`, `marketingName` and `developerModeStatus` only once it has connected to a
+            // device, so a freshly plugged-in device has none of them. Simulators always say "simulated".
+            guard hw.reality != "simulated", let udid = hw.udid else { return nil }
             return Device(
                 udid: udid,
                 name: entry.deviceProperties.name ?? udid,
-                model: hw.marketingName ?? "Unknown",
+                model: hw.marketingName ?? hw.deviceType ?? hw.productType ?? "Unknown",
                 platform: hw.platform ?? "iOS",
                 osVersion: entry.deviceProperties.osVersionNumber ?? "?",
                 tunnelState: entry.connectionProperties.tunnelState ?? "unavailable",
-                developerModeEnabled: entry.deviceProperties.developerModeStatus == "enabled")
+                developerModeEnabled: entry.deviceProperties.developerModeStatus.map { $0 == "enabled" })
         }
     }
 
-    /// The requested device (name or UDID), else the first reachable one.
+    /// The requested device, else the first reachable one. `requested` is tried as a whole UDID or name, then as the
+    /// start of a UDID, then as part of a name or model ("ipad", "se"). More than one match is an error, not a guess.
     public static func pick(from devices: [Device], requested: String?, platform: String = "iOS") throws -> Device? {
         let pool = devices.filter { $0.platform == platform }
         if let requested {
-            return pool.first { $0.udid == requested || $0.name.caseInsensitiveCompare(requested) == .orderedSame }
+            let matches = matching(requested, in: pool)
+            guard matches.count <= 1 else { throw SochiError.ambiguousDevice(requested, matches: matches) }
+            return matches.first
         }
         guard let device = pool.first(where: \.isReachable) else {
             throw SochiError.noDeviceConnected(paired: pool.map(\.name))
         }
         return device
+    }
+
+    /// Devices matching a query, from the most specific kind of match that finds any.
+    static func matching(_ query: String, in pool: [Device]) -> [Device] {
+        let q = folded(query)
+        let tiers: [(Device) -> Bool] = [
+            { folded($0.udid) == q || folded($0.name) == q },
+            { folded($0.udid).hasPrefix(q) },
+            { folded($0.name).contains(q) || folded($0.model).contains(q) },
+        ]
+        for tier in tiers {
+            let matches = pool.filter(tier)
+            if !matches.isEmpty { return matches }
+        }
+        return []
+    }
+
+    /// Case-insensitive, and a typed ' matches the ’ devices put in their default names ("Chandram’s iPhone").
+    private static func folded(_ text: String) -> String {
+        text.lowercased().replacingOccurrences(of: "\u{2019}", with: "'").trimmingCharacters(in: .whitespaces)
     }
 
     /// The on-device URL of an installed app, or nil if it isn't installed.

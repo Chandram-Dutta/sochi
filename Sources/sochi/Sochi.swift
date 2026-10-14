@@ -20,7 +20,7 @@ struct SessionOptions: ParsableArguments {
     @Option(name: .shortAndLong, help: "Scheme to build (default: the app scheme).")
     var scheme: String?
 
-    @Option(name: .shortAndLong, help: "Device name or UDID (default: the connected device).")
+    @Option(name: .shortAndLong, help: "Device: any unique part of its name or model (\"ipad\"), or the start of its UDID (default: the connected device).")
     var device: String?
 
     @Flag(help: "Run on a simulator instead of a physical device.")

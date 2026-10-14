@@ -9,6 +9,7 @@ public enum SochiError: Error, CustomStringConvertible {
     case unknownScheme(String, available: [String])
     case noSimulator(platform: String)
     case unknownDevice(String)
+    case ambiguousDevice(String, matches: [Device])
     case noAppTarget(scheme: String)
     case unexpectedOutput(command: String)
     case noDeviceConnected(paired: [String])
@@ -74,7 +75,10 @@ public enum SochiError: Error, CustomStringConvertible {
         case .noSimulator(let platform):
             return "No available \(platform) simulators. Install a runtime in Xcode › Settings › Components."
         case .unknownDevice(let query):
-            return "No simulator matches '\(query)'. Run `sochi sims` to list them."
+            return "No device or simulator matches '\(query)'. Run `sochi devices` or `sochi sims` to list them."
+        case .ambiguousDevice(let query, let matches):
+            let list = matches.map { "  \($0.name) (\($0.model), \($0.udid))" }.joined(separator: "\n")
+            return "'\(query)' matches \(matches.count) devices:\n\(list)\nPass more of the name, or the start of the UDID."
         case .noAppTarget(let scheme):
             return "Scheme '\(scheme)' doesn't build an application"
         case .unexpectedOutput(let command):

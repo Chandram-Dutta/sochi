@@ -79,7 +79,45 @@ import Testing
         """
         let devices = try Devices.parse(Data(json.utf8))
         #expect(devices.map(\.udid) == ["0000-AAAA"])
-        #expect(devices[0].isReachable && devices[0].developerModeEnabled)
+        #expect(devices[0].isReachable && devices[0].developerModeEnabled == true)
+    }
+
+    /// A device CoreDevice hasn't connected to yet (just plugged in) has no reality, marketing name or developer mode
+    /// status; it's still a usable physical device. Shape taken from an iPad on Xcode 27.0.
+    @Test func keepsDevicesCoreDeviceHasNotConnectedTo() throws {
+        let json = """
+        { "result": { "devices": [
+          { "connectionProperties": { "pairingState": "paired", "transportType": "wired", "tunnelState": "disconnected" },
+            "deviceProperties": { "bootState": "booted", "name": "iPad", "osVersionNumber": "27.2" },
+            "hardwareProperties": { "deviceType": "iPad", "platform": "iOS", "productType": "iPad12,2", "udid": "0000-BBBB" } }
+        ] } }
+        """
+        let devices = try Devices.parse(Data(json.utf8))
+        #expect(devices.map(\.udid) == ["0000-BBBB"])
+        #expect(devices[0].model == "iPad" && devices[0].developerModeEnabled == nil)
+        #expect(devices[0].isReachable && devices[0].status == "available")
+    }
+
+    @Test func picksDeviceByAnyUnambiguousPart() throws {
+        func device(_ udid: String, _ name: String, _ model: String) -> Device {
+            Device(udid: udid, name: name, model: model, platform: "iOS", osVersion: "27.0",
+                   tunnelState: "disconnected", developerModeEnabled: true)
+        }
+        let se = device("00008030-001519A4", "Chandram’s iPhone", "iPhone SE")
+        let pro = device("00008140-00AA22BB", "Chandram’s iPhone", "iPhone 18 Pro")
+        let pad = device("00008030-00087959", "Chandram’s iPad", "iPad (9th generation)")
+        let all = [se, pro, pad]
+
+        #expect(try Devices.pick(from: all, requested: "ipad") == pad)              // part of the name
+        #expect(try Devices.pick(from: all, requested: "chandram's ipad") == pad)   // typed ' for ’
+        #expect(try Devices.pick(from: all, requested: "se") == se)                 // part of the model
+        #expect(try Devices.pick(from: all, requested: "18 pro") == pro)
+        #expect(try Devices.pick(from: all, requested: "00008140") == pro)          // start of the UDID
+        #expect(try Devices.pick(from: all, requested: "00008030-00087959") == pad)
+        #expect(try Devices.pick(from: all, requested: "watch") == nil)
+        // Same name on two phones, or a prefix both share: list them instead of guessing.
+        #expect(throws: SochiError.self) { try Devices.pick(from: all, requested: "chandram’s iphone") }
+        #expect(throws: SochiError.self) { try Devices.pick(from: all, requested: "00008030") }
     }
 
     @Test func requiresReachableDevice() throws {

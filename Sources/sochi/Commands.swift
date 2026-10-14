@@ -70,8 +70,8 @@ struct Devices_: AsyncParsableCommand {
             let devices = try await Devices.list()
             if devices.isEmpty { Terminal.print(Terminal.dim("No paired devices. Connect one and trust this Mac.")) }
             for d in devices {
-                let state = d.isReachable ? Terminal.green("● \(d.tunnelState)") : Terminal.dim("○ unavailable")
-                let devMode = d.developerModeEnabled ? "" : Terminal.yellow("  developer mode off")
+                let state = d.isReachable ? Terminal.green("● \(d.status)") : Terminal.dim("○ unavailable")
+                let devMode = d.developerModeEnabled != false ? "" : Terminal.yellow("  developer mode off")
                 Terminal.print(
                     "  \(d.name.padding(toLength: 22, withPad: " ", startingAt: 0)) "
                         + Terminal.dim("\(d.model) · \(d.platform) \(d.osVersion) · \(d.udid)") + "  \(state)\(devMode)")
