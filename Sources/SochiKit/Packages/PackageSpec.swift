@@ -90,7 +90,11 @@ public struct SochiConfig: Sendable {
         self.url = url
         self.text = text
         let root = try TOML.parse(text)
-        packages = try (root["packages"]?.pairs ?? []).map { key, value in try Self.spec(key: key, value: value) }
+        switch root["packages"] {
+        case nil: packages = []
+        case .table(let pairs)?: packages = try pairs.map { key, value in try Self.spec(key: key, value: value) }
+        case _?: throw TOML.ParseError(line: 0, message: "packages: expected a table")
+        }
     }
 
     public static func new(projectDirectory: URL) -> SochiConfig {
@@ -105,24 +109,33 @@ public struct SochiConfig: Sendable {
     static func spec(key: String, value: TOMLValue) throws -> PackageSpec {
         func fail(_ message: String) -> TOML.ParseError { TOML.ParseError(line: 0, message: "packages.\(key): \(message)") }
         guard case .table = value else { throw fail("expected a table") }
+        func string(_ field: String) throws -> String? {
+            guard let raw = value[field] else { return nil }
+            guard let string = raw.string else { throw fail("`\(field)` must be a string") }
+            return string
+        }
         var products: [String: [String]] = [:]
-        for (target, list) in value["products"]?.pairs ?? [] {
-            products[target] = try (list.array ?? []).map { item in
-                guard let name = item.string else { throw fail("products must be lists of names") }
-                return name
+        if let table = value["products"] {
+            guard let targets = table.pairs else { throw fail("`products` must be a table of target = [products]") }
+            for (target, list) in targets {
+                guard let items = list.array else { throw fail("products must be lists of names") }
+                products[target] = try items.map { item in
+                    guard let name = item.string else { throw fail("products must be lists of names") }
+                    return name
+                }
             }
         }
-        if let path = value["path"]?.string {
+        if let path = try string("path") {
             return PackageSpec(identity: key.lowercased(), source: .local(path: path), products: products)
         }
-        guard let url = value["url"]?.string else { throw fail("needs `url` or `path`") }
+        guard let url = try string("url") else { throw fail("needs `url` or `path`") }
         let requirement: PackageSpec.Requirement
-        if let v = value["from"]?.string { requirement = .upToNextMajor(v) }
-        else if let v = value["minor"]?.string { requirement = .upToNextMinor(v) }
-        else if let v = value["exact"]?.string { requirement = .exact(v) }
-        else if let v = value["branch"]?.string { requirement = .branch(v) }
-        else if let v = value["revision"]?.string { requirement = .revision(v) }
-        else if let v = value["range"]?.string {
+        if let v = try string("from") { requirement = .upToNextMajor(v) }
+        else if let v = try string("minor") { requirement = .upToNextMinor(v) }
+        else if let v = try string("exact") { requirement = .exact(v) }
+        else if let v = try string("branch") { requirement = .branch(v) }
+        else if let v = try string("revision") { requirement = .revision(v) }
+        else if let v = try string("range") {
             let parts = v.components(separatedBy: "..<").map { $0.trimmingCharacters(in: .whitespaces) }
             guard parts.count == 2 else { throw fail("range looks like \"1.0.0..<2.0.0\"") }
             requirement = .range(parts[0], parts[1])

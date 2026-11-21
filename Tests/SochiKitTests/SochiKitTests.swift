@@ -959,6 +959,17 @@ import Testing
         #expect(PackageSpec.identity(of: "https://github.com/Simperium/simperium-ios/") == "simperium-ios")
         #expect(PackageSpec.identity(of: "git@github.com:pointfreeco/Swift-Dependencies.git") == "swift-dependencies")
     }
+
+    @Test(arguments: [
+        "packages = \"swift-dependencies\"",
+        "[packages]\na = { url = \"https://x/a\", from = \"1.0.0\", products = [\"A\"] }",
+        "[packages]\na = { url = \"https://x/a\", from = \"1.0.0\", products = { App = \"A\" } }",
+        "[packages]\na = { url = \"https://x/a\", from = 1, exact = \"1.0.0\" }",
+        "[packages]\na = { path = 1, url = \"https://x/a\", from = \"1.0.0\" }",
+    ])
+    func rejectsWrongTypes(text: String) {
+        #expect(throws: TOML.ParseError.self) { try SochiConfig(url: URL(fileURLWithPath: "/tmp/sochi.toml"), text: text) }
+    }
 }
 
 @Suite struct ProjectPackagesTests {
@@ -1121,5 +1132,15 @@ import Testing
         let (path, cleanup) = try setup(project: [a], config: [b], base: [deps])
         defer { cleanup() }
         #expect(throws: SochiError.self) { try PackageManager.planSync(path: path, force: true) }
+    }
+
+    @Test func refusesToSyncAMistypedProductList() throws {
+        let (path, cleanup) = try setup(project: [deps], config: [deps], base: [deps])
+        defer { cleanup() }
+        let toml = URL(fileURLWithPath: path).appendingPathComponent(SochiConfig.fileName)
+        let text = try String(contentsOf: toml, encoding: .utf8)
+        try text.replacingOccurrences(of: "{ HelloApp = [\"Dependencies\"] }", with: "{ HelloApp = \"Dependencies\" }")
+            .write(to: toml, atomically: true, encoding: .utf8)
+        #expect(throws: TOML.ParseError.self) { try PackageManager.planSync(path: path, force: true) }
     }
 }
