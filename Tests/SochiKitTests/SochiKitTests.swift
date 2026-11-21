@@ -348,8 +348,12 @@ import Testing
         await #expect(throws: SochiError.self) { try await entries("network-extensions", ["teleport"]) }
         // No catalog entitlements: found in Xcode's schema by name, values from the schema/docs.
         await #expect(throws: SochiError.self) { try await entries("data-protection") }
-        #expect(try await entries("data-protection", ["NSFileProtectionComplete"])
-                == ["com.apple.developer.default-data-protection": .string("NSFileProtectionComplete")])
+        if schema.key(titled: "Data Protection") != nil {
+            #expect(try await entries("data-protection", ["NSFileProtectionComplete"])
+                    == ["com.apple.developer.default-data-protection": .string("NSFileProtectionComplete")])
+        } else {
+            await #expect(throws: SochiError.self) { try await entries("data-protection", ["NSFileProtectionComplete"]) }
+        }
         await #expect(throws: SochiError.self) { try await entries("in-app-purchase") }
         await #expect(throws: SochiError.self) { try await entries("push-notifications", ["extra"]) }
     }
@@ -364,6 +368,27 @@ import Testing
                 == ["keychain-access-groups": .array(["$(AppIdentifierPrefix)dev.shared"])])
         let modes = try CapabilityWriter.resolve("background-modes", catalog: catalog)
         await #expect(throws: SochiError.self) { try await CapabilityWriter.entries(for: modes, values: [], bundleID: "x", schema: schema) }
+    }
+
+    @Test func resolvesCatalogEntitlementsBySchemaTitle() async throws {
+        let capability = ResolvedCapability.catalog(.init(
+            id: "DATA_PROTECTION", name: "Data Protection", summary: "", documentationURL: nil,
+            platforms: ["IOS"], productTypes: [], teamTypes: [], isPublic: true, needsApproval: false, entitlements: []))
+        let key = EntitlementSchema.Key(
+            name: "com.apple.developer.default-data-protection", kind: .string, title: "Data Protection",
+            allowedValues: ["NSFileProtectionComplete", "NSFileProtectionCompleteUnlessOpen"])
+        let schema = EntitlementSchema(keys: [key.name: key])
+        #expect(try await CapabilityWriter.entries(for: capability, values: ["NSFileProtectionComplete"], bundleID: "dev.app", schema: schema)
+                == [key.name: .string("NSFileProtectionComplete")])
+        await #expect(throws: SochiError.self) {
+            try await CapabilityWriter.entries(for: capability, values: [], bundleID: "dev.app", schema: schema)
+        }
+        await #expect(throws: SochiError.self) {
+            try await CapabilityWriter.entries(for: capability, values: ["invalid"], bundleID: "dev.app", schema: schema)
+        }
+        await #expect(throws: SochiError.self) {
+            try await CapabilityWriter.entries(for: capability, values: ["NSFileProtectionComplete"], bundleID: "dev.app", schema: EntitlementSchema(keys: [:]))
+        }
     }
 
     @Test func mergesAndRemovesValues() {
