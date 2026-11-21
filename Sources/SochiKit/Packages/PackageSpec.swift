@@ -80,9 +80,23 @@ public struct SochiConfig: Sendable {
     public private(set) var text: String
     public private(set) var packages: [PackageSpec]
 
+    private struct ReadError: Error, CustomStringConvertible {
+        let url: URL
+        let underlying: any Error
+
+        var description: String { "Could not read \(url.path): \(underlying.localizedDescription)" }
+    }
+
     public static func load(projectDirectory: URL) throws -> SochiConfig? {
         let url = projectDirectory.appendingPathComponent(fileName)
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let text: String
+        do {
+            text = try String(contentsOf: url, encoding: .utf8)
+        } catch CocoaError.fileReadNoSuchFile {
+            return nil
+        } catch {
+            throw ReadError(url: url, underlying: error)
+        }
         return try SochiConfig(url: url, text: text)
     }
 

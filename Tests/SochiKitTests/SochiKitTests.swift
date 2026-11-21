@@ -927,6 +927,30 @@ import Testing
 }
 
 @Suite struct SochiConfigTests {
+    @Test func rejectsUnreadableConfigWithoutChangingIt() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sochi-config-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(SochiConfig.fileName)
+        let bytes = Data([0xff, 0xfe, 0x80])
+        try bytes.write(to: url)
+
+        #expect(throws: (any Error).self) { try SochiConfig.load(projectDirectory: dir) }
+        #expect(try Data(contentsOf: url) == bytes)
+    }
+
+    @Test func loadsMissingAndReadableConfigs() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sochi-config-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(try SochiConfig.load(projectDirectory: dir) == nil)
+        let url = dir.appendingPathComponent(SochiConfig.fileName)
+        for text in ["", "[packages.example]\npath = \"../Example\"\n"] {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            #expect(try SochiConfig.load(projectDirectory: dir)?.text == text)
+        }
+    }
+
     let remote = PackageSpec(identity: "swift-dependencies",
                              source: .remote(url: "https://github.com/pointfreeco/swift-dependencies", requirement: .upToNextMajor("1.4.0")),
                              products: ["App": ["Dependencies"]])
