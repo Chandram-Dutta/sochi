@@ -486,15 +486,16 @@ import Testing
         _ = rootID
     }
 
-    @Test(arguments: [
+    @Test(.enabled(if: try GoldenFixtures.directory() != nil, "No golden fixture for the selected Xcode"), arguments: [
         ("NotificationService", "com.apple.product-type.app-extension"),
         ("Share", "com.apple.product-type.app-extension"),
         ("AppIntents", "com.apple.product-type.extensionkit-extension"),
         ("AppClip", "com.apple.product-type.application.on-demand-install-capable"),
     ])
     func wiringMatchesXcode(name: String, productType: String) async throws {
-        let golden = try String(contentsOf: Self.root.appendingPathComponent(
-            "Fixtures/Golden/Xcode-27.0/AllTemplates/HelloApp.xcodeproj/project.pbxproj"), encoding: .utf8)
+        let fixture = try #require(GoldenFixtures.directory())
+        let golden = try String(contentsOf: fixture.appendingPathComponent(
+            "AllTemplates/HelloApp.xcodeproj/project.pbxproj"), encoding: .utf8)
         let projectURL = Self.root.appendingPathComponent("Fixtures/HelloApp/HelloApp.xcodeproj")
         let file = try PBXProjectFile(projectURL: projectURL)
         var spec = TargetSpec(name: name, folder: name, productType: productType)
@@ -550,7 +551,7 @@ import Testing
     /// Not template content: sochi takes these from the host app (the signing style comes from Xcode's signing UI).
     static let hostAligned: Set<String> = ["SWIFT_VERSION", "IPHONEOS_DEPLOYMENT_TARGET", "CODE_SIGN_STYLE"]
 
-    @Test(arguments: [
+    @Test(.enabled(if: try GoldenFixtures.directory() != nil, "No golden fixture for the selected Xcode"), arguments: [
         ("Widget Extension", "Widget", "WidgetExtension"),
         ("Share Extension", "Share", "Share"),
         ("Notification Service Extension", "NotificationService", "NotificationService"),
@@ -558,6 +559,7 @@ import Testing
         ("App Clip", "AppClip", "AppClip"),
     ])
     func matchesXcode(template: String, name: String, targetName: String) async throws {
+        let fixture = try #require(GoldenFixtures.directory())
         let index = try await TemplateIndex.load()
         let file = try PBXProjectFile(projectURL: Self.root.appendingPathComponent("Fixtures/HelloApp/HelloApp.xcodeproj"))
         let context = TemplateContext(
@@ -570,7 +572,7 @@ import Testing
         #expect(output.targetName == targetName)
 
         // Files, byte for byte apart from the "Created by" line.
-        let goldenDir = Self.root.appendingPathComponent("Fixtures/Golden/Xcode-27.0/AllTemplates/\(name)")
+        let goldenDir = fixture.appendingPathComponent("AllTemplates/\(name)")
         var golden: [String: Data] = [:]
         let walker = FileManager.default.enumerator(at: goldenDir, includingPropertiesForKeys: [.isDirectoryKey])!
         while let url = walker.nextObject() as? URL {
@@ -592,7 +594,7 @@ import Testing
 
         // Build settings per configuration.
         let objects = try PBXProjectFile.objects(
-            in: String(contentsOf: Self.root.appendingPathComponent("Fixtures/Golden/Xcode-27.0/AllTemplates/HelloApp.xcodeproj/project.pbxproj"), encoding: .utf8), path: "g")
+            in: String(contentsOf: fixture.appendingPathComponent("AllTemplates/HelloApp.xcodeproj/project.pbxproj"), encoding: .utf8), path: "g")
         let target = objects.values.first { $0["isa"] as? String == "PBXNativeTarget" && $0["name"] as? String == targetName }!
         for configID in objects[target["buildConfigurationList"] as! String]!["buildConfigurations"] as! [String] {
             let config = objects[configID]!

@@ -8,6 +8,10 @@ set -euo pipefail
 
 version="${1:?usage: scripts/build-release.sh <version>}"
 version="${version#v}"
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] || {
+    echo "Invalid release version: $version" >&2
+    exit 1
+}
 asset="sochi-macos-universal.tar.gz"
 cd "$(dirname "$0")/.."
 
