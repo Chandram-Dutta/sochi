@@ -493,7 +493,7 @@ import Testing
         ("AppClip", "com.apple.product-type.application.on-demand-install-capable"),
     ])
     func wiringMatchesXcode(name: String, productType: String) async throws {
-        let fixture = try #require(GoldenFixtures.directory())
+        let fixture = try #require(try GoldenFixtures.directory())
         let golden = try String(contentsOf: fixture.appendingPathComponent(
             "AllTemplates/HelloApp.xcodeproj/project.pbxproj"), encoding: .utf8)
         let projectURL = Self.root.appendingPathComponent("Fixtures/HelloApp/HelloApp.xcodeproj")
@@ -559,7 +559,7 @@ import Testing
         ("App Clip", "AppClip", "AppClip"),
     ])
     func matchesXcode(template: String, name: String, targetName: String) async throws {
-        let fixture = try #require(GoldenFixtures.directory())
+        let fixture = try #require(try GoldenFixtures.directory())
         let index = try await TemplateIndex.load()
         let file = try PBXProjectFile(projectURL: Self.root.appendingPathComponent("Fixtures/HelloApp/HelloApp.xcodeproj"))
         let context = TemplateContext(
