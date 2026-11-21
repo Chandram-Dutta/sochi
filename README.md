@@ -1,5 +1,7 @@
 # sochi
 
+[![CI](https://github.com/Chandram-Dutta/sochi/actions/workflows/ci.yml/badge.svg)](https://github.com/Chandram-Dutta/sochi/actions/workflows/ci.yml)
+
 Build, run and edit Xcode projects without opening Xcode.
 
 sochi drives Apple's own tools — `xcodebuild`, `devicectl`, and the templates, capability catalog and build

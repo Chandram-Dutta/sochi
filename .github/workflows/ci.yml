@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - run: swift build
+      - run: swift test
+      - name: Smoke-test release archive and installer
+        run: |
+          scripts/build-release.sh v0.1.0
+          SOCHI_ARCHIVE="$PWD/dist/sochi-macos-universal.tar.gz" \
+            SOCHI_INSTALL="$RUNNER_TEMP/sochi-install" SOCHI_NO_MODIFY_PATH=1 bash install.sh
+          test "$("$RUNNER_TEMP/sochi-install/bin/sochi" --version)" = 0.1.0
+          "$RUNNER_TEMP/sochi-install/bin/sochi" --help | grep -F 'Build and run'
+          git diff --exit-code -- Sources/sochi/Version.swift
+          if scripts/build-release.sh 'not-a-version'; then
+            echo 'Invalid versions must be rejected' >&2
+            exit 1
+          fi
+          printf 'invalid checksum\n' > dist/sochi-macos-universal.tar.gz.sha256
+          if SOCHI_ARCHIVE="$PWD/dist/sochi-macos-universal.tar.gz" \
+            SOCHI_INSTALL="$RUNNER_TEMP/sochi-bad-install" SOCHI_NO_MODIFY_PATH=1 bash install.sh; then
+            echo 'Invalid checksums must be rejected' >&2
+            exit 1
+          fi
+          test ! -e "$RUNNER_TEMP/sochi-bad-install/bin/sochi"

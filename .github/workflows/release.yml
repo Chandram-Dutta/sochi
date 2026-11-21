@@ -9,6 +9,11 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -23,29 +28,50 @@ jobs:
           xcode-version: latest-stable
 
       - name: Build universal binary
-        run: scripts/build-release.sh "${{ github.event.release.tag_name }}"
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: scripts/build-release.sh "$RELEASE_TAG"
 
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" \
+          gh release upload "$RELEASE_TAG" \
             dist/sochi-macos-universal.tar.gz dist/sochi-macos-universal.tar.gz.sha256 --clobber
 
       - name: Point the Homebrew formula at this release
         if: ${{ !github.event.release.prerelease }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          tag="${{ github.event.release.tag_name }}"
+          tag="$RELEASE_TAG"
           version="${tag#v}"
           sha="$(awk '{print $1}' dist/sochi-macos-universal.tar.gz.sha256)"
-          git fetch origin main
-          git checkout main
+          git fetch origin main:refs/remotes/origin/main
+          git switch -C release-formula origin/main
           sed -i '' -E \
-            -e "s|releases/download/v[^/]+/|releases/download/v$version/|" \
+            -e "s|releases/download/[^/]+/|releases/download/$tag/|" \
             -e "s|^  sha256 \".*\"|  sha256 \"$sha\"|" \
             -e "s|^  version \".*\"|  version \"$version\"|" \
             Formula/sochi.rb
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "Homebrew: sochi $version"
-          git push origin main
+          git add Formula/sochi.rb
+          if git diff --cached --quiet; then
+            echo "Formula already points at $tag."
+            exit 0
+          fi
+          git commit -m "Homebrew: sochi $version"
+          if ! git push origin HEAD:main; then
+            branch="release-formula-$tag-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            git push origin "HEAD:refs/heads/$branch"
+            echo "Main rejected the formula update. Merge $branch to enable brew install for $tag." >> "$GITHUB_STEP_SUMMARY"
+            if ! gh pr list --head "$branch" --base main --json number --jq '.[].number' | grep -q .; then
+              gh pr create --base main --head "$branch" \
+                --title "Homebrew: sochi $version" \
+                --body "Updates the formula to the published $tag binary. Merge this PR to make it available through Homebrew. If Actions cannot create PRs, open one from this branch manually." \
+                || { echo "Enable Actions PR creation or open a PR from $branch manually." >&2; exit 1; }
+            fi
+          fi
